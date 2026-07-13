@@ -34,6 +34,7 @@ export default function useDJRadio() {
   const chatEndRef = useRef(null);   
   const audioPlayerRef = useRef(new Audio());
   const recognitionRef = useRef(null);
+  const handleNextRef = useRef(null);
 
   // --- API / State Synchronizers ---
   const syncStatus = useCallback(async () => {
@@ -197,11 +198,19 @@ export default function useDJRadio() {
       return;
     }
     if (isListening) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch (err) {
+        console.error("Error al detener reconocimiento:", err);
+      }
       setIsListening(false);
     } else {
-      recognitionRef.current.start();
-      setIsListening(true);
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+      } catch (err) {
+        console.error("Error al iniciar reconocimiento:", err);
+      }
     }
   }, [isListening]);
 
@@ -244,14 +253,22 @@ export default function useDJRadio() {
       };
 
       recognition.onend = () => {
-        if (recognitionRef.current && isListening) {
-           setIsListening(false);
-        }
+        setIsListening(false);
       };
 
       recognitionRef.current = recognition;
     }
-  }, [isListening]);
+
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (err) {
+          console.error("Error al detener reconocimiento al desmontar:", err);
+        }
+      }
+    };
+  }, []);
 
   // Inyección de YouTube Iframe API Script
   useEffect(() => {
@@ -261,6 +278,11 @@ export default function useDJRadio() {
       document.body.appendChild(tag);
     }
   }, []);
+
+  // Sincronizar la ref de handleNext
+  useEffect(() => {
+    handleNextRef.current = handleNext;
+  }, [handleNext]);
 
   // Inicialización del Reproductor de YouTube
   useEffect(() => {
@@ -275,7 +297,7 @@ export default function useDJRadio() {
           width: '100%', 
           videoId: currentSong.videoId,
           playerVars: { 'autoplay': 1, 'origin': window.location.origin },
-          events: { 'onStateChange': (e) => e.data === 0 && handleNext() }
+          events: { 'onStateChange': (e) => e.data === 0 && handleNextRef.current && handleNextRef.current() }
         });
       } else { 
         playerRef.current.loadVideoById(currentSong.videoId); 
@@ -287,7 +309,7 @@ export default function useDJRadio() {
     } else { 
       setTimeout(initPlayer, 1000); 
     }
-  }, [currentSong?.videoId, handleNext]);
+  }, [currentSong?.videoId]);
 
   // Teclas multimedia y shortcuts de teclado
   useEffect(() => {
