@@ -16,7 +16,7 @@ async function handleChat(req, res) {
         const historyRes = await axios.get(`${PYTHON_SERVICE_URL}/history?limit=10`);
         musicHistory = historyRes.data || [];
       } catch (hErr) {
-        console.error("❌ Error cargando historial de música:", hErr.message);
+        console.error("Error cargando historial de música:", hErr.message);
       }
     }
 
@@ -39,18 +39,17 @@ async function handleChat(req, res) {
       djDecision = { locucion: "¡Aquí tienes!", busqueda: message };
     }
 
-    console.log(`🎵 DJ (${searchType || 'song'}): "${djDecision.busqueda}"`);
+    console.log(`DJ (${searchType || 'song'}): "${djDecision.busqueda}"`);
 
     const audioUrl = await generateTTS(djDecision.locucion);
 
-    let nextSong = null;
     try {
       const searchRes = await axios.get(`${PYTHON_SERVICE_URL}/search`, { 
         params: { q: djDecision.busqueda, type: searchType || 'song' } 
       });
       nextSong = searchRes.data;
     } catch (err) {
-      console.error("❌ Error en search_song:", err.message);
+      console.error("Error en search_song:", err.message);
     }
 
     res.json({ 
@@ -60,7 +59,7 @@ async function handleChat(req, res) {
     });
 
   } catch (error) {
-    console.error("❌ Error en controller chat:", error.message);
+    console.error("Error en controller chat:", error.message);
     res.status(500).json({ error: 'Server Error' });
   }
 }

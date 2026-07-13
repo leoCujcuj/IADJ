@@ -16,4 +16,4 @@ app.use('/audio', expressStatic(audioFolder));
 // Rutas de la API
 app.use('/api', chatRoutes);
 
-app.listen(PORT, () => console.log(`🚀 Orquestador modular en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Orquestador modular en puerto ${PORT}`));

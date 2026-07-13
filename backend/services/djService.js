@@ -26,7 +26,7 @@ async function getDJDecision(prompt) {
         return JSON.parse(response.data.choices[0].message.content);
       }
     } catch (error) {
-      console.error(`❌ Falló ${model}`);
+      console.error(`Fallo en modelo ${model}`);
     }
   }
   return null;

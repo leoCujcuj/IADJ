@@ -5,7 +5,7 @@ export default function StatusPill({ isConnected }) {
   return (
     <div className={`yt-status-pill ${isConnected ? 'connected' : ''}`}>
       <PlayCircle size={18} fill={isConnected ? "#1ed760" : "#FF0000"} color="#FFF" />
-      <span>{isConnected ? 'Account' : 'Modo Invitado'}</span>
+      <span>{isConnected ? 'YouTube Music Activo' : 'Modo Invitado'}</span>
     </div>
   );
 }
