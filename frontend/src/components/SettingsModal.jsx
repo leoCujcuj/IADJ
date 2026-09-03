@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Volume2, Sparkles, Clock, Sliders } from 'lucide-react';
+import { X, Volume2, Sparkles, Clock, Sliders, Database, RotateCcw } from 'lucide-react';
 
 export default function SettingsModal({
   isOpen,
@@ -9,7 +9,10 @@ export default function SettingsModal({
   personality,
   setPersonality,
   crossfade,
-  setCrossfade
+  setCrossfade,
+  sessionStatus = 'idle',
+  sessionName = 'Sesión Principal',
+  onNewSession
 }) {
   if (!isOpen) return null;
 
@@ -100,6 +103,45 @@ export default function SettingsModal({
               />
               <span className="slider round"></span>
             </label>
+          </div>
+
+          {/* Persistencia de Sesión (PostgreSQL) */}
+          <div className="settings-group session-settings-group">
+            <label className="settings-label">
+              <Database size={18} />
+              <span>Persistencia de Sesión (PostgreSQL)</span>
+            </label>
+            <p className="settings-desc">
+              Tu cola de reproducción, historial y conversación con el DJ se guardan automáticamente para no perderlos si sales o recargas.
+            </p>
+
+            <div className="session-status-card">
+              <div className="session-status-left">
+                <span className={`status-indicator-dot ${sessionStatus}`} />
+                <div className="session-status-info">
+                  <span className="session-name-title">{sessionName || 'Sesión Principal'}</span>
+                  <span className="session-status-text">
+                    {sessionStatus === 'saving' && 'Guardando cambios en Base de Datos...'}
+                    {sessionStatus === 'saved' && 'Sincronizada con PostgreSQL'}
+                    {sessionStatus === 'restored' && 'Sesión restaurada desde Base de Datos'}
+                    {sessionStatus === 'error' && 'Guardado localmente (sin conexión a BD)'}
+                    {sessionStatus === 'idle' && 'Sesión activa'}
+                  </span>
+                </div>
+              </div>
+
+              {onNewSession && (
+                <button 
+                  type="button" 
+                  className="btn-new-session" 
+                  onClick={onNewSession}
+                  title="Archivar la sesión actual e iniciar una nueva desde cero"
+                >
+                  <RotateCcw size={15} />
+                  <span>Nueva Sesión</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

@@ -13,6 +13,14 @@ DB_CONFIG = {
     "port": os.getenv("DB_PORT", "5432")
 }
 
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        return conn
+    except Exception as e:
+        print(f"⚠️ No se pudo conectar a PostgreSQL: {e}")
+        return None
+
 def init_db():
     retries = 10
     while retries > 0:
@@ -38,7 +46,7 @@ def init_db():
             cur.close()
             conn.close()
 
-            # Ahora conectamos a la base de datos específica para crear la tabla
+            # Ahora conectamos a la base de datos específica para crear las tablas
             conn = psycopg2.connect(**DB_CONFIG)
             cur = conn.cursor()
             
@@ -50,9 +58,32 @@ def init_db():
                     expires_at TIMESTAMP,
                     auth_data JSONB
                 );
+
+                CREATE TABLE IF NOT EXISTS radio_sessions (
+                    id VARCHAR(64) PRIMARY KEY,
+                    name TEXT NOT NULL DEFAULT 'Sesión Principal',
+                    current_song JSONB,
+                    queue JSONB DEFAULT '[]'::jsonb,
+                    history JSONB DEFAULT '[]'::jsonb,
+                    chat_history JSONB DEFAULT '[]'::jsonb,
+                    settings JSONB DEFAULT '{}'::jsonb,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS session_interactions (
+                    id SERIAL PRIMARY KEY,
+                    session_id VARCHAR(64),
+                    video_id TEXT,
+                    title TEXT,
+                    artist TEXT,
+                    interaction_type VARCHAR(20),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             conn.commit()
-            print("✅ Tabla 'user_tokens' lista.")
+            print("✅ Tablas 'user_tokens', 'radio_sessions' y 'session_interactions' listas.")
             cur.close()
             conn.close()
             break

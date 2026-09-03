@@ -2,7 +2,13 @@ import React from 'react';
 import { Radio, Sliders, ListPlus } from 'lucide-react';
 import StatusPill from './common/StatusPill';
 
-export default function Header({ isConnected, onOpenSettings, onExportPlaylist }) {
+export default function Header({ 
+  isConnected, 
+  onOpenSettings, 
+  onExportPlaylist,
+  sessionName = 'Sesión Principal',
+  onOpenSessions
+}) {
   return (
     <header className="header">
       <div className="header-content">
@@ -11,6 +17,15 @@ export default function Header({ isConnected, onOpenSettings, onExportPlaylist }
       </div>
       
       <div className="header-actions">
+        <button 
+          className="header-action-btn session-action-btn"
+          onClick={onOpenSessions}
+          title="Cambiar o crear estaciones de radio"
+        >
+          <Radio size={19} className="session-icon-active" />
+          <span className="btn-label">{sessionName || 'Emisoras'}</span>
+        </button>
+
         <button 
           className="header-action-btn"
           onClick={onExportPlaylist}
@@ -34,3 +49,4 @@ export default function Header({ isConnected, onOpenSettings, onExportPlaylist }
     </header>
   );
 }
+

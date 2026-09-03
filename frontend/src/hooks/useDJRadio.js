@@ -68,6 +68,75 @@ export default function useDJRadio() {
     localStorage.setItem('dj_crossfade', val);
   };
 
+  // --- Estados de Persistencia de Sesión (PostgreSQL + LocalStorage) ---
+  const [sessionId, setSessionId] = useState(() => {
+    return localStorage.getItem('dj_session_id') || 'session_default';
+  });
+  const [sessionName, setSessionName] = useState('Sesión Principal');
+  const [sessionStatus, setSessionStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'restored' | 'error'
+  const [isSessionsOpen, setIsSessionsOpen] = useState(false);
+  const [sessionsList, setSessionsList] = useState([]);
+  const isRestoringSessionRef = useRef(true);
+  const saveTimeoutRef = useRef(null);
+
+  // --- Sistema Profesional de Confirmaciones y Alertas (Reemplazo de alert/confirm) ---
+  const [modalDialog, setModalDialog] = useState(null);
+
+  const showConfirm = useCallback(({ title, message, type = 'warning', confirmText = 'Aceptar', cancelText = 'Cancelar' }) => {
+    return new Promise((resolve) => {
+      setModalDialog({
+        isOpen: true,
+        title,
+        message,
+        type,
+        confirmText,
+        cancelText,
+        isAlert: false,
+        onConfirm: () => {
+          setModalDialog(null);
+          resolve(true);
+        },
+        onClose: () => {
+          setModalDialog(null);
+          resolve(false);
+        }
+      });
+    });
+  }, []);
+
+  const showAlert = useCallback(({ title, message, type = 'info', confirmText = 'Entendido' }) => {
+    return new Promise((resolve) => {
+      setModalDialog({
+        isOpen: true,
+        title,
+        message,
+        type,
+        confirmText,
+        isAlert: true,
+        onConfirm: () => {
+          setModalDialog(null);
+          resolve(true);
+        },
+        onClose: () => {
+          setModalDialog(null);
+          resolve(true);
+        }
+      });
+    });
+  }, []);
+
+  const fetchSessions = useCallback(async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:3001/api/sessions');
+      const data = await res.json();
+      if (data && Array.isArray(data.sessions)) {
+        setSessionsList(data.sessions);
+      }
+    } catch (e) {
+      console.warn("Error cargando lista de sesiones:", e);
+    }
+  }, []);
+
   const playerRef = useRef(null);
   const currentSongRef = useRef(null);
   const preloadedDataRef = useRef(null);
@@ -343,13 +412,21 @@ export default function useDJRadio() {
           }
         ]);
       } else if (data.error) {
-        alert(data.error);
+        showAlert({
+          title: "Exportar Playlist",
+          message: data.error,
+          type: "warning"
+        });
       }
     } catch (e) {
       console.error("Error exportando playlist:", e);
-      alert("No se pudo exportar la playlist.");
+      showAlert({
+        title: "Exportar Playlist",
+        message: "No se pudo exportar la playlist. Verifica que el servidor esté en línea.",
+        type: "danger"
+      });
     }
-  }, []);
+  }, [showAlert]);
 
   const handleNext = useCallback(() => {
     executeTransition();
@@ -366,7 +443,11 @@ export default function useDJRadio() {
     
     const isYoutubeLink = trimmed.includes('youtube.com') || trimmed.includes('youtu.be');
     if (!isYoutubeLink) {
-      alert("Solo se permiten links directos de YouTube.");
+      showAlert({
+        title: "Enlace no válido",
+        message: "Solo se permiten enlaces directos de canciones o videos de YouTube.",
+        type: "warning"
+      });
       setManualSearch('');
       return;
     }
@@ -499,13 +580,21 @@ export default function useDJRadio() {
     // Opera y Opera GX no tienen servidores de backend para Web Speech API
     const isOpera = (!!window.opr && !!window.opr.addons) || !!window.opera || navigator.userAgent.indexOf(' OPR/') >= 0;
     if (isOpera) {
-      alert("Opera y Opera GX no soportan reconocimiento de voz (Web Speech API). Aunque el permiso de micrófono esté activado, Opera no cuenta con servidores para transcribir voz a texto.\n\nPor favor, abre la aplicación en Google Chrome o Microsoft Edge para usar el micrófono.");
+      showAlert({
+        title: "Navegador no compatible",
+        message: "Opera y Opera GX no cuentan con servidores para transcribir voz a texto (Web Speech API).\n\nPor favor, abre la aplicación en Google Chrome o Microsoft Edge para usar el micrófono.",
+        type: "warning"
+      });
       return;
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert("Tu navegador no soporta reconocimiento de voz nativo (Web Speech API). Por favor usa Google Chrome o Microsoft Edge.");
+      showAlert({
+        title: "Reconocimiento no disponible",
+        message: "Tu navegador no soporta reconocimiento de voz nativo. Por favor usa Google Chrome o Microsoft Edge.",
+        type: "warning"
+      });
       return;
     }
 
@@ -584,11 +673,23 @@ export default function useDJRadio() {
         return;
       }
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        alert("Permiso de micrófono denegado. Permítelo en el icono de candado o permisos junto a la URL en tu navegador.");
+        showAlert({
+          title: "Permiso Denegado",
+          message: "Permiso de micrófono denegado. Permítelo en el icono de candado o permisos junto a la URL en tu navegador.",
+          type: "warning"
+        });
       } else if (event.error === 'network') {
-        alert("Error de conexión con el servicio de voz. Si usas Brave o un bloqueador de anuncios, habilita los servicios de voz de Google en Configuración o prueba en Google Chrome / Microsoft Edge.");
+        showAlert({
+          title: "Error de Conexión de Voz",
+          message: "Error de conexión con el servicio de voz. Si usas Brave o un bloqueador de anuncios, habilita los servicios de voz de Google en Configuración o prueba en Google Chrome / Microsoft Edge.",
+          type: "warning"
+        });
       } else if (event.error === 'audio-capture') {
-        alert("No se detectó audio del micrófono. Comprueba tu micrófono en la configuración de sonido de Windows.");
+        showAlert({
+          title: "Micrófono no Detectado",
+          message: "No se detectó audio del micrófono. Comprueba tu micrófono en la configuración de sonido del sistema.",
+          type: "warning"
+        });
       }
       isListeningRef.current = false;
       setIsListening(false);
@@ -612,7 +713,7 @@ export default function useDJRadio() {
       setIsListening(false);
       recognitionRef.current = null;
     }
-  }, []);
+  }, [showAlert]);
 
   // Cleanup de reconocimiento de voz al desmontar
   useEffect(() => {
@@ -630,6 +731,150 @@ export default function useDJRadio() {
     const interval = setInterval(syncStatus, 5000);
     return () => clearInterval(interval);
   }, [syncStatus]);
+
+  // Restauración de sesión desde PostgreSQL (o localStorage como respaldo)
+  useEffect(() => {
+    let isMounted = true;
+
+    const restoreSession = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:3001/api/session/current');
+        const data = await res.json();
+
+        if (!isMounted) return;
+
+        if (data && data.exists && data.session) {
+          const s = data.session;
+          if (s.id) {
+            setSessionId(s.id);
+            localStorage.setItem('dj_session_id', s.id);
+          }
+          if (s.name) setSessionName(s.name);
+          if (s.current_song && s.current_song.videoId) {
+            setCurrentSong(s.current_song);
+            currentSongRef.current = s.current_song;
+          }
+          if (Array.isArray(s.queue) && s.queue.length > 0) {
+            setQueue(s.queue);
+          }
+          if (Array.isArray(s.history) && s.history.length > 0) {
+            setHistory(s.history);
+          }
+          if (Array.isArray(s.chat_history) && s.chat_history.length > 0) {
+            setChatHistory(s.chat_history);
+          }
+          if (s.settings) {
+            if (s.settings.frequency !== undefined) setFrequency(s.settings.frequency);
+            if (s.settings.personality) setPersonality(s.settings.personality);
+            if (s.settings.crossfade !== undefined) setCrossfade(s.settings.crossfade);
+          }
+          setSessionStatus('restored');
+          console.log('[SESIÓN] Sesión restaurada con éxito desde la Base de Datos.');
+        } else {
+          // Fallback a localStorage si la BD aún no tiene sesión guardada
+          const backup = localStorage.getItem('dj_session_backup');
+          if (backup) {
+            try {
+              const parsed = JSON.parse(backup);
+              if (parsed.currentSong) setCurrentSong(parsed.currentSong);
+              if (parsed.queue) setQueue(parsed.queue);
+              if (parsed.history) setHistory(parsed.history);
+              if (parsed.chatHistory) setChatHistory(parsed.chatHistory);
+              console.log('[SESIÓN] Sesión restaurada desde copia local de respaldo.');
+            } catch (e) {}
+          }
+        }
+      } catch (err) {
+        console.warn('No se pudo conectar con el servidor para restaurar sesión, recurriendo a caché local:', err);
+        const backup = localStorage.getItem('dj_session_backup');
+        if (backup) {
+          try {
+            const parsed = JSON.parse(backup);
+            if (parsed.currentSong) setCurrentSong(parsed.currentSong);
+            if (parsed.queue) setQueue(parsed.queue);
+            if (parsed.history) setHistory(parsed.history);
+            if (parsed.chatHistory) setChatHistory(parsed.chatHistory);
+          } catch (e) {}
+        }
+      } finally {
+        setTimeout(() => {
+          isRestoringSessionRef.current = false;
+        }, 1200);
+        fetchSessions();
+      }
+    };
+
+    restoreSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [fetchSessions]);
+
+  // Recargar sesiones al abrir el panel lateral
+  useEffect(() => {
+    if (isSessionsOpen) {
+      fetchSessions();
+    }
+  }, [isSessionsOpen, fetchSessions]);
+
+  // Autoguardado con debounce (1.5 segundos) hacia PostgreSQL y localStorage
+  useEffect(() => {
+    if (isRestoringSessionRef.current) return;
+    if (!currentSong && queue.length === 0 && history.length === 0 && chatHistory.length <= 1) return;
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+    setSessionStatus('saving');
+
+    saveTimeoutRef.current = setTimeout(async () => {
+      const payload = {
+        id: sessionId,
+        name: sessionName,
+        current_song: currentSong,
+        queue,
+        history,
+        chat_history: chatHistory,
+        settings: {
+          frequency,
+          personality,
+          crossfade
+        }
+      };
+
+      // Respaldo inmediato en localStorage
+      try {
+        localStorage.setItem('dj_session_backup', JSON.stringify({
+          currentSong,
+          queue,
+          history,
+          chatHistory
+        }));
+      } catch (e) {}
+
+      // Guardado en PostgreSQL
+      try {
+        const res = await fetch('http://127.0.0.1:3001/api/session/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          setSessionStatus('saved');
+        } else {
+          setSessionStatus('error');
+        }
+      } catch (err) {
+        console.warn('Error en autoguardado de sesión en BD:', err);
+        setSessionStatus('error');
+      }
+    }, 1500);
+
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [currentSong, queue, history, chatHistory, frequency, personality, crossfade, sessionId, sessionName]);
 
   // Inyección de YouTube Iframe API Script
   useEffect(() => {
@@ -838,6 +1083,216 @@ export default function useDJRadio() {
     ]);
   }, [currentTrivia, currentSong]);
 
+  const handleNewSession = useCallback(async () => {
+    const confirmed = await showConfirm({
+      title: "Comenzar Nueva Sesión",
+      message: "¿Deseas comenzar una nueva sesión de radio?\nLa sesión actual quedará guardada de forma segura en la base de datos.",
+      confirmText: "Comenzar nueva",
+      cancelText: "Cancelar",
+      type: "warning"
+    });
+    if (!confirmed) return;
+
+    try {
+      const nowStr = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const res = await fetch('http://127.0.0.1:3001/api/session/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `Sesión de Radio (${nowStr})` })
+      });
+      const data = await res.json();
+      if (data && data.new_session_id) {
+        setSessionId(data.new_session_id);
+        localStorage.setItem('dj_session_id', data.new_session_id);
+        if (data.name) setSessionName(data.name);
+      }
+    } catch (e) {
+      const localNewId = `session_${Date.now()}`;
+      setSessionId(localNewId);
+      localStorage.setItem('dj_session_id', localNewId);
+    }
+
+    setCurrentSong(null);
+    currentSongRef.current = null;
+    setQueue([]);
+    setHistory([]);
+    setChatHistory([
+      { sender: 'dj', text: '¡Qué onda mucha! Comenzamos una nueva sesión en Gemini Radio. ¿Qué te pongo hoy?' }
+    ]);
+    localStorage.removeItem('dj_session_backup');
+    if (playerRef.current && typeof playerRef.current.stopVideo === 'function') {
+      playerRef.current.stopVideo();
+    }
+    setSessionStatus('saved');
+    fetchSessions();
+  }, [fetchSessions]);
+
+  const handleSwitchSession = useCallback(async (targetId) => {
+    if (!targetId || targetId === sessionId) return;
+
+    // Guardar sesión actual antes de cambiar si tiene contenido
+    if (currentSong || queue.length > 0 || history.length > 0 || chatHistory.length > 1) {
+      try {
+        await fetch('http://127.0.0.1:3001/api/session/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: sessionId,
+            name: sessionName,
+            current_song: currentSong,
+            queue,
+            history,
+            chat_history: chatHistory,
+            settings: { frequency, personality, crossfade }
+          })
+        });
+      } catch (e) {
+        console.warn("Error guardando sesión previa al cambiar:", e);
+      }
+    }
+
+    try {
+      setSessionStatus('saving');
+      const res = await fetch('http://127.0.0.1:3001/api/session/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: targetId })
+      });
+      const data = await res.json();
+
+      if (data && data.success && data.session) {
+        const s = data.session;
+        setSessionId(s.id);
+        localStorage.setItem('dj_session_id', s.id);
+        setSessionName(s.name || 'Sesión de Radio');
+        
+        setCurrentSong(s.current_song || null);
+        currentSongRef.current = s.current_song || null;
+        setQueue(Array.isArray(s.queue) ? s.queue : []);
+        setHistory(Array.isArray(s.history) ? s.history : []);
+        setChatHistory(Array.isArray(s.chat_history) && s.chat_history.length > 0 ? s.chat_history : [
+          { sender: 'dj', text: `¡Qué onda! Sintonizando "${s.name}". ¿Qué rolita te gustaría escuchar aquí?` }
+        ]);
+
+        if (s.settings) {
+          if (s.settings.frequency !== undefined) setFrequency(s.settings.frequency);
+          if (s.settings.personality) setPersonality(s.settings.personality);
+          if (s.settings.crossfade !== undefined) setCrossfade(s.settings.crossfade);
+        }
+
+        setSessionStatus('restored');
+        setIsSessionsOpen(false);
+        fetchSessions();
+      }
+    } catch (err) {
+      console.error("Error al conmutar sesión:", err);
+      setSessionStatus('error');
+    }
+  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, fetchSessions]);
+
+  const handleCreateSession = useCallback(async (customName) => {
+    const name = (customName || '').trim() || 'Nueva Estación';
+
+    // Guardar sesión actual antes de crear
+    if (currentSong || queue.length > 0 || history.length > 0) {
+      try {
+        await fetch('http://127.0.0.1:3001/api/session/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: sessionId,
+            name: sessionName,
+            current_song: currentSong,
+            queue,
+            history,
+            chat_history: chatHistory,
+            settings: { frequency, personality, crossfade }
+          })
+        });
+      } catch (e) {}
+    }
+
+    try {
+      setSessionStatus('saving');
+      const res = await fetch('http://127.0.0.1:3001/api/session/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      const data = await res.json();
+
+      if (data && data.success && data.session) {
+        const s = data.session;
+        setSessionId(s.id);
+        localStorage.setItem('dj_session_id', s.id);
+        setSessionName(s.name);
+        setCurrentSong(null);
+        currentSongRef.current = null;
+        setQueue([]);
+        setHistory([]);
+        setChatHistory(s.chat_history || [
+          { sender: 'dj', text: `¡Qué onda! Esta es tu estación '${s.name}'. ¿Qué rola ponemos para estrenarla?` }
+        ]);
+        if (playerRef.current && typeof playerRef.current.stopVideo === 'function') {
+          playerRef.current.stopVideo();
+        }
+        setSessionStatus('saved');
+        setIsSessionsOpen(false);
+        fetchSessions();
+      }
+    } catch (err) {
+      console.error("Error creando nueva sesión:", err);
+      setSessionStatus('error');
+    }
+  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, fetchSessions]);
+
+  const handleRenameSession = useCallback(async (id, newName) => {
+    if (!id || !newName.trim()) return;
+    try {
+      const res = await fetch(`http://127.0.0.1:3001/api/session/${id}/rename`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName.trim() })
+      });
+      const data = await res.json();
+      if (data && data.success) {
+        if (id === sessionId) {
+          setSessionName(newName.trim());
+        }
+        fetchSessions();
+      }
+    } catch (err) {
+      console.error("Error renombrando sesión:", err);
+    }
+  }, [sessionId, fetchSessions]);
+
+  const handleDeleteSession = useCallback(async (id) => {
+    if (!id) return;
+    try {
+      const res = await fetch(`http://127.0.0.1:3001/api/session/${id}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+
+      if (data && data.success) {
+        if (data.was_active && data.active_session) {
+          const s = data.active_session;
+          setSessionId(s.id);
+          localStorage.setItem('dj_session_id', s.id);
+          setSessionName(s.name);
+          setCurrentSong(s.current_song || null);
+          currentSongRef.current = s.current_song || null;
+          setQueue(s.queue || []);
+          setHistory(s.history || []);
+          setChatHistory(s.chat_history || []);
+        }
+        fetchSessions();
+      }
+    } catch (err) {
+      console.error("Error eliminando sesión:", err);
+    }
+  }, [fetchSessions]);
+
   return {
     message,
     setMessage,
@@ -888,6 +1343,22 @@ export default function useDJRadio() {
     handleAskDJMore,
     handleShareTriviaToChat,
     handleExportPlaylist,
+    sessionId,
+    sessionName,
+    sessionStatus,
+    handleNewSession,
+    isSessionsOpen,
+    setIsSessionsOpen,
+    sessionsList,
+    handleSwitchSession,
+    handleCreateSession,
+    handleRenameSession,
+    handleDeleteSession,
+    fetchSessions,
+    modalDialog,
+    setModalDialog,
+    showConfirm,
+    showAlert,
     playerRef
   };
 }

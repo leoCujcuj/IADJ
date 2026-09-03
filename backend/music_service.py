@@ -6,8 +6,10 @@ from datetime import datetime
 from fastapi import FastAPI, Query
 from ytmusicapi import YTMusic, parsers
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
 from dotenv import load_dotenv
+from init_db import get_db_connection
 
 load_dotenv()
 app = FastAPI()
@@ -643,6 +645,447 @@ def export_playlist(title: str = None):
         "count": len(video_ids),
         "video_ids": video_ids
     }
+
+# ==========================================
+# GESTIÓN Y PERSISTENCIA DE SESIONES EN BD
+# ==========================================
+
+def parse_json_field(val, default):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except Exception:
+            return default
+    return default
+
+class SessionSavePayload(BaseModel):
+    id: Optional[str] = "session_default"
+    name: Optional[str] = "Sesión Principal"
+    current_song: Optional[Dict[str, Any]] = None
+    queue: Optional[List[Dict[str, Any]]] = []
+    history: Optional[List[Dict[str, Any]]] = []
+    chat_history: Optional[List[Dict[str, Any]]] = []
+    settings: Optional[Dict[str, Any]] = {}
+
+class SessionLoadPayload(BaseModel):
+    id: str
+
+class SessionResetPayload(BaseModel):
+    name: Optional[str] = "Nueva Sesión de Radio"
+
+@app.get("/session/current")
+def get_current_session():
+    global current_queue, played_history, currently_playing_id, currently_playing_title
+    conn = get_db_connection()
+    if not conn:
+        return {
+            "exists": bool(currently_playing_id or current_queue or played_history),
+            "source": "memory_fallback",
+            "session": {
+                "id": "session_memory",
+                "name": "Sesión Local",
+                "current_song": {
+                    "videoId": currently_playing_id,
+                    "title": currently_playing_title
+                } if currently_playing_id else None,
+                "queue": current_queue,
+                "history": played_history,
+                "chat_history": [],
+                "settings": {}
+            }
+        }
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, name, current_song, queue, history, chat_history, settings, is_active, updated_at
+            FROM radio_sessions
+            WHERE is_active = TRUE
+            ORDER BY updated_at DESC
+            LIMIT 1;
+        """)
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row:
+            return {"exists": False, "session": None}
+
+        sess_id, name, cur_song, q, h, chat_h, sett, is_act, updated_at = row
+        parsed_cur_song = parse_json_field(cur_song, None)
+        parsed_q = parse_json_field(q, [])
+        parsed_h = parse_json_field(h, [])
+        parsed_chat_h = parse_json_field(chat_h, [])
+        parsed_sett = parse_json_field(sett, {})
+
+        current_queue = parsed_q
+        played_history = parsed_h
+        if parsed_cur_song:
+            currently_playing_id = parsed_cur_song.get("videoId")
+            currently_playing_title = parsed_cur_song.get("title", "")
+
+        return {
+            "exists": True,
+            "source": "database",
+            "session": {
+                "id": sess_id,
+                "name": name,
+                "current_song": parsed_cur_song,
+                "queue": parsed_q,
+                "history": parsed_h,
+                "chat_history": parsed_chat_h,
+                "settings": parsed_sett,
+                "updated_at": str(updated_at)
+            }
+        }
+    except Exception as e:
+        print(f"Error recuperando sesión actual: {e}")
+        return {"exists": False, "error": str(e), "session": None}
+
+@app.post("/session/save")
+def save_session(payload: SessionSavePayload):
+    global current_queue, played_history, currently_playing_id, currently_playing_title
+    
+    if payload.queue is not None:
+        current_queue = payload.queue
+    if payload.history is not None:
+        played_history = payload.history
+    if payload.current_song:
+        currently_playing_id = payload.current_song.get("videoId")
+        currently_playing_title = payload.current_song.get("title", "")
+
+    conn = get_db_connection()
+    if not conn:
+        return {"success": True, "saved_to": "memory_only", "warning": "PostgreSQL no disponible"}
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO radio_sessions (id, name, current_song, queue, history, chat_history, settings, is_active, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+                name = COALESCE(EXCLUDED.name, radio_sessions.name),
+                current_song = EXCLUDED.current_song,
+                queue = EXCLUDED.queue,
+                history = EXCLUDED.history,
+                chat_history = EXCLUDED.chat_history,
+                settings = EXCLUDED.settings,
+                is_active = TRUE,
+                updated_at = NOW();
+        """, (
+            payload.id,
+            payload.name,
+            json.dumps(payload.current_song) if payload.current_song else None,
+            json.dumps(payload.queue),
+            json.dumps(payload.history),
+            json.dumps(payload.chat_history),
+            json.dumps(payload.settings)
+        ))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "saved_to": "database", "id": payload.id}
+    except Exception as e:
+        print(f"Error guardando sesión en BD: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/session/reset")
+def reset_session(payload: Optional[SessionResetPayload] = None):
+    global current_queue, played_history, currently_playing_id, currently_playing_title
+    current_queue = []
+    played_history = []
+    currently_playing_id = None
+    currently_playing_title = ""
+
+    new_id = f"session_{int(datetime.now().timestamp())}"
+    sess_name = payload.name if payload and payload.name else "Nueva Sesión de Radio"
+
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE radio_sessions SET is_active = FALSE;")
+            cur.execute("""
+                INSERT INTO radio_sessions (id, name, current_song, queue, history, chat_history, settings, is_active)
+                VALUES (%s, %s, NULL, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, TRUE);
+            """, (new_id, sess_name))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error reseteando sesión en BD: {e}")
+
+    return {
+        "success": True,
+        "new_session_id": new_id,
+        "name": sess_name
+    }
+
+class SessionCreatePayload(BaseModel):
+    name: str
+
+class SessionRenamePayload(BaseModel):
+    name: str
+
+@app.post("/session/create")
+def create_session(payload: SessionCreatePayload):
+    global current_queue, played_history, currently_playing_id, currently_playing_title
+    sess_name = (payload.name or "Nueva Sesión").strip()
+    new_id = f"session_{int(datetime.now().timestamp())}_{random.randint(100, 999)}"
+    initial_chat = [
+        {
+            "sender": "dj",
+            "text": f"¡Qué onda! Esta es tu estación '{sess_name}'. ¿Qué rola ponemos para estrenarla?"
+        }
+    ]
+
+    current_queue = []
+    played_history = []
+    currently_playing_id = None
+    currently_playing_title = ""
+
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE radio_sessions SET is_active = FALSE;")
+            cur.execute("""
+                INSERT INTO radio_sessions (id, name, current_song, queue, history, chat_history, settings, is_active, created_at, updated_at)
+                VALUES (%s, %s, NULL, '[]'::jsonb, '[]'::jsonb, %s, '{}'::jsonb, TRUE, NOW(), NOW());
+            """, (new_id, sess_name, json.dumps(initial_chat)))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error creando nueva sesión en BD: {e}")
+
+    return {
+        "success": True,
+        "session": {
+            "id": new_id,
+            "name": sess_name,
+            "current_song": None,
+            "queue": [],
+            "history": [],
+            "chat_history": initial_chat,
+            "settings": {},
+            "is_active": True
+        }
+    }
+
+@app.put("/session/{session_id}/rename")
+def rename_session(session_id: str, payload: SessionRenamePayload):
+    new_name = (payload.name or "").strip()
+    if not new_name:
+        return {"error": "El nombre no puede estar vacío"}
+
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "Base de datos no disponible"}
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE radio_sessions
+            SET name = %s, updated_at = NOW()
+            WHERE id = %s;
+        """, (new_name, session_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "id": session_id, "name": new_name}
+    except Exception as e:
+        print(f"Error renombrando sesión: {e}")
+        return {"error": str(e)}
+
+@app.delete("/session/{session_id}")
+def delete_session(session_id: str):
+    global current_queue, played_history, currently_playing_id, currently_playing_title
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "Base de datos no disponible"}
+
+    try:
+        cur = conn.cursor()
+        # Verificar si era la sesión activa
+        cur.execute("SELECT is_active FROM radio_sessions WHERE id = %s;", (session_id,))
+        row = cur.fetchone()
+        was_active = row[0] if row else False
+
+        # Eliminar sesión
+        cur.execute("DELETE FROM radio_sessions WHERE id = %s;", (session_id,))
+        conn.commit()
+
+        active_session = None
+        if was_active:
+            # Buscar la sesión más reciente restante
+            cur.execute("""
+                SELECT id, name, current_song, queue, history, chat_history, settings
+                FROM radio_sessions
+                ORDER BY updated_at DESC
+                LIMIT 1;
+            """)
+            next_row = cur.fetchone()
+            if next_row:
+                n_id, n_name, n_song, n_q, n_h, n_chat, n_sett = next_row
+                cur.execute("UPDATE radio_sessions SET is_active = TRUE, updated_at = NOW() WHERE id = %s;", (n_id,))
+                conn.commit()
+                parsed_cur_song = parse_json_field(n_song, None)
+                parsed_q = parse_json_field(n_q, [])
+                parsed_h = parse_json_field(n_h, [])
+                parsed_chat = parse_json_field(n_chat, [])
+                parsed_sett = parse_json_field(n_sett, {})
+
+                current_queue = parsed_q
+                played_history = parsed_h
+                if parsed_cur_song:
+                    currently_playing_id = parsed_cur_song.get("videoId")
+                    currently_playing_title = parsed_cur_song.get("title", "")
+                else:
+                    currently_playing_id = None
+                    currently_playing_title = ""
+
+                active_session = {
+                    "id": n_id,
+                    "name": n_name,
+                    "current_song": parsed_cur_song,
+                    "queue": parsed_q,
+                    "history": parsed_h,
+                    "chat_history": parsed_chat,
+                    "settings": parsed_sett
+                }
+            else:
+                # Si no queda ninguna sesión, crear una por defecto
+                fallback_id = f"session_{int(datetime.now().timestamp())}"
+                fallback_name = "Sesión Principal"
+                cur.execute("""
+                    INSERT INTO radio_sessions (id, name, current_song, queue, history, chat_history, settings, is_active)
+                    VALUES (%s, %s, NULL, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, TRUE);
+                """, (fallback_id, fallback_name))
+                conn.commit()
+                current_queue = []
+                played_history = []
+                currently_playing_id = None
+                currently_playing_title = ""
+                active_session = {
+                    "id": fallback_id,
+                    "name": fallback_name,
+                    "current_song": None,
+                    "queue": [],
+                    "history": [],
+                    "chat_history": [],
+                    "settings": {}
+                }
+
+        cur.close()
+        conn.close()
+        return {
+            "success": True,
+            "deleted_id": session_id,
+            "was_active": was_active,
+            "active_session": active_session
+        }
+    except Exception as e:
+        print(f"Error eliminando sesión: {e}")
+        return {"error": str(e)}
+
+@app.get("/sessions")
+def list_sessions():
+    conn = get_db_connection()
+    if not conn:
+        return {"sessions": []}
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, name, is_active, created_at, updated_at, current_song,
+                   COALESCE(jsonb_array_length(history), 0) as history_count,
+                   COALESCE(jsonb_array_length(queue), 0) as queue_count,
+                   COALESCE(jsonb_array_length(chat_history), 0) as msg_count
+            FROM radio_sessions
+            ORDER BY updated_at DESC
+            LIMIT 30;
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        sessions = []
+        for r in rows:
+            parsed_cur_song = parse_json_field(r[5], None)
+            sessions.append({
+                "id": r[0],
+                "name": r[1],
+                "is_active": r[2],
+                "created_at": str(r[3]),
+                "updated_at": str(r[4]),
+                "current_song": parsed_cur_song,
+                "history_count": r[6],
+                "queue_count": r[7],
+                "msg_count": r[8]
+            })
+        return {"sessions": sessions}
+    except Exception as e:
+        print(f"Error listando sesiones: {e}")
+        return {"sessions": [], "error": str(e)}
+
+@app.post("/session/load")
+def load_session(payload: SessionLoadPayload):
+    global current_queue, played_history, currently_playing_id, currently_playing_title
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "Base de datos no disponible"}
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE radio_sessions SET is_active = FALSE;")
+        cur.execute("""
+            UPDATE radio_sessions 
+            SET is_active = TRUE, updated_at = NOW()
+            WHERE id = %s
+            RETURNING id, name, current_song, queue, history, chat_history, settings;
+        """, (payload.id,))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if not row:
+            return {"error": "Sesión no encontrada"}
+
+        sess_id, name, cur_song, q, h, chat_h, sett = row
+        parsed_cur_song = parse_json_field(cur_song, None)
+        parsed_q = parse_json_field(q, [])
+        parsed_h = parse_json_field(h, [])
+        parsed_chat_h = parse_json_field(chat_h, [])
+        parsed_sett = parse_json_field(sett, {})
+
+        current_queue = parsed_q
+        played_history = parsed_h
+        if parsed_cur_song:
+            currently_playing_id = parsed_cur_song.get("videoId")
+            currently_playing_title = parsed_cur_song.get("title", "")
+        else:
+            currently_playing_id = None
+            currently_playing_title = ""
+
+        return {
+            "success": True,
+            "session": {
+                "id": sess_id,
+                "name": name,
+                "current_song": parsed_cur_song,
+                "queue": parsed_q,
+                "history": parsed_h,
+                "chat_history": parsed_chat_h,
+                "settings": parsed_sett
+            }
+        }
+    except Exception as e:
+        print(f"Error cargando sesión {payload.id}: {e}")
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

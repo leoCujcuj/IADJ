@@ -7,6 +7,8 @@ import QueueSection from './components/QueueSection';
 import SettingsModal from './components/SettingsModal';
 import LyricsSidebar from './components/LyricsSidebar';
 import TriviaModal from './components/TriviaModal';
+import SessionsModal from './components/SessionsModal';
+import ConfirmModal from './components/common/ConfirmModal';
 import useDJRadio from './hooks/useDJRadio';
 
 function App() {
@@ -59,6 +61,20 @@ function App() {
     handleAskDJMore,
     handleShareTriviaToChat,
     handleExportPlaylist,
+    sessionId,
+    sessionStatus,
+    sessionName,
+    handleNewSession,
+    isSessionsOpen,
+    setIsSessionsOpen,
+    sessionsList,
+    handleSwitchSession,
+    handleCreateSession,
+    handleRenameSession,
+    handleDeleteSession,
+    modalDialog,
+    showConfirm,
+    showAlert,
     playerRef
   } = useDJRadio();
 
@@ -68,6 +84,8 @@ function App() {
         isConnected={isConnected} 
         onOpenSettings={() => setIsSettingsOpen(true)}
         onExportPlaylist={handleExportPlaylist}
+        sessionName={sessionName}
+        onOpenSessions={() => setIsSessionsOpen(true)}
       />
 
       <main className="main-content">
@@ -143,7 +161,37 @@ function App() {
         setPersonality={setPersonality}
         crossfade={crossfade}
         setCrossfade={setCrossfade}
+        sessionStatus={sessionStatus}
+        sessionName={sessionName}
+        onNewSession={handleNewSession}
       />
+
+      <SessionsModal
+        isOpen={isSessionsOpen}
+        onClose={() => setIsSessionsOpen(false)}
+        sessions={sessionsList}
+        activeSessionId={sessionId}
+        onSwitchSession={handleSwitchSession}
+        onCreateSession={handleCreateSession}
+        onRenameSession={handleRenameSession}
+        onDeleteSession={handleDeleteSession}
+        showConfirm={showConfirm}
+        showAlert={showAlert}
+      />
+
+      {modalDialog && (
+        <ConfirmModal
+          isOpen={modalDialog.isOpen}
+          title={modalDialog.title}
+          message={modalDialog.message}
+          type={modalDialog.type}
+          confirmText={modalDialog.confirmText}
+          cancelText={modalDialog.cancelText}
+          isAlert={modalDialog.isAlert}
+          onConfirm={modalDialog.onConfirm}
+          onClose={modalDialog.onClose}
+        />
+      )}
     </div>
   );
 }
