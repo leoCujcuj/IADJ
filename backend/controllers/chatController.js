@@ -13,18 +13,43 @@ if (!fs.existsSync(lyricsCacheFolder)) {
 let songsSinceLastDJIntervention = 1;
 const triviaCache = new Map();
 
-function getTimeContext() {
+function getTimeContext(userTimeZone) {
+  const tz = userTimeZone || process.env.TZ || 'America/Guatemala';
   const now = new Date();
-  const hours = now.getHours();
+
+  let hours = now.getHours();
+  try {
+    const hourStr = new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric',
+      hourCycle: 'h23',
+      timeZone: tz
+    }).format(now);
+    hours = parseInt(hourStr, 10);
+  } catch (e) {
+    console.warn("Error resolviendo hora en zona horaria:", tz, e.message);
+  }
+
   let period = "Madrugada";
   if (hours >= 6 && hours < 12) period = "Mañana";
-  else if (hours >= 12 && hours < 19) period = "Tarde";
-  else if (hours >= 19 && hours < 24) period = "Noche";
+  else if (hours >= 12 && hours < 14) period = "Mediodía";
+  else if (hours >= 14 && hours < 19) period = "Tarde";
+  else if (hours >= 19 && hours <= 23) period = "Noche";
 
-  const days = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
-  const dayName = days[now.getDay()];
-  const timeStr = now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true });
-  return `${timeStr} (${period} de ${dayName})`;
+  let formatted = "";
+  try {
+    const timeFormatter = new Intl.DateTimeFormat('es-MX', {
+      weekday: 'long',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: tz
+    });
+    formatted = timeFormatter.format(now);
+  } catch (e) {
+    formatted = `${hours}:${String(now.getMinutes()).padStart(2, '0')}`;
+  }
+
+  return `${formatted} (${period}). OBLIGATORIO: Son las ${hours}h (${period}). NO uses saludos de 'noche' si el periodo es ${period}`;
 }
 
 function isTriviaOrConversation(text) {
@@ -78,9 +103,9 @@ function isPureNextRequest(text) {
 }
 
 async function handleChat(req, res) {
-  const { message, currentSong, searchType, personality = 'chill', frequency = 5 } = req.body;
+  const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
-  const timeContext = getTimeContext();
+  const timeContext = getTimeContext(timeZone);
   
   try {
     const statusRes = await axios.get(`${PYTHON_SERVICE_URL}/status`);
@@ -160,7 +185,9 @@ Usuario dice: "${message}".
 ${modeInstruction}
 Sonando ahora: ${currentSong ? `${currentSong.title} - ${currentSong.artist}` : 'Nada'}.
 Historial reciente: ${historyContext}.
-RECUERDA: Sé musicalmente coherente. Si el usuario menciona múltiples artistas o un estilo (ej: Daniel Caesar y Mac Miller), elige una canción real y representativa de uno de ellos (o del mismo género R&B/Neo-Soul/Chill). JAMÁS mezcles géneros no solicitados como rap mexicano o metal. Tu locución debe nombrar ÚNICAMENTE al artista que pongas en "busqueda".`;
+REGLAS OBLIGATORIAS:
+1. TIEMPO EXACTO: Si saludas o haces referencia al momento del día, básate ESTRICTAMENTE en "${timeContext}". Si el periodo es Tarde o Mediodía, JAMÁS digas 'en esta noche' ni 'buenas noches'.
+2. Sé musicalmente coherente. Si el usuario menciona múltiples artistas o un estilo, elige una canción representativa del mismo género. Tu locución debe nombrar ÚNICAMENTE al artista que pongas en "busqueda".`;
 
     let djDecision = await getDJDecision(prompt);
     
@@ -221,9 +248,9 @@ RECUERDA: Sé musicalmente coherente. Si el usuario menciona múltiples artistas
 
 // Endpoint para precargar la siguiente canción a los últimos 30 segundos
 async function handlePreload(req, res) {
-  const { currentSong, personality = 'chill', frequency = 5 } = req.body;
+  const { currentSong, personality = 'chill', frequency = 5, timeZone } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
-  const timeContext = getTimeContext();
+  const timeContext = getTimeContext(timeZone);
 
   try {
     const peekRes = await axios.get(`${PYTHON_SERVICE_URL}/queue/peek`);

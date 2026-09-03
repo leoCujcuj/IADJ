@@ -3,7 +3,12 @@ const { OPENROUTER_API_KEY, DJ_SYSTEM_PROMPT } = require('../config/constants');
 
 async function getDJDecision(prompt, customSystemPrompt = null) {
   if (!OPENROUTER_API_KEY) return null;
-  const models = ["openrouter/auto", "google/gemini-2.0-flash-001"];
+  const models = [
+    "nvidia/nemotron-3.5-lightning:free",
+    "minimax/minimax-m2.7:free",
+    "liquid/lfm-2.5-2.6b:free",
+    "openrouter/auto"
+  ];
 
   for (const model of models) {
     try {

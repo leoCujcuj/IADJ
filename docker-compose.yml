@@ -29,6 +29,7 @@ services:
       - DB_NAME=youtube_music_dj
       - DB_USER=postgres
       - DB_PASS=admin
+      - TZ=America/Guatemala
     depends_on:
       - db
     volumes:
@@ -48,6 +49,7 @@ services:
       - PYTHON_SERVICE_URL=http://python-service:8000
       - DB_HOST=db
       - PORT=3001
+      - TZ=America/Guatemala
     depends_on:
       - python-service
     restart: always

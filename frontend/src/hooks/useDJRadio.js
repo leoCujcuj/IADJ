@@ -222,7 +222,8 @@ export default function useDJRadio() {
         body: JSON.stringify({ 
           currentSong: currentSongRef.current,
           personality: personalityRef.current,
-          frequency: frequencyRef.current
+          frequency: frequencyRef.current,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
         })
       });
       const data = await res.json();
@@ -289,7 +290,8 @@ export default function useDJRadio() {
           currentSong: currentSongRef.current, 
           searchType,
           personality: personalityRef.current,
-          frequency: frequencyRef.current
+          frequency: frequencyRef.current,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
         })
       });
       const data = await response.json();

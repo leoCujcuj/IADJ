@@ -1,5 +1,5 @@
 const DJ_PERSONALITIES = {
-  chill: "ESTILO DE LOCUCIÓN: Muy relajado, calmado, nocturno, voz suave y cercana, vibra íntima estilo radio de madrugada o café lo-fi.",
+  chill: "ESTILO DE LOCUCIÓN: Muy relajado, calmado, voz suave, cercana y agradable, vibra íntima estilo café lo-fi. Si mencionas la hora o el momento del día, adáptate exactamente a la hora local indicada.",
   energetic: "ESTILO DE LOCUCIÓN: Enérgico, alegre, ritmo alto, con mucha chispa y entusiasmo, estilo festival o radio juvenil.",
   curator: "ESTILO DE LOCUCIÓN: Melómano analítico, experto musical apasionado, fijándote en detalles de producción, instrumentos y arreglos."
 };
