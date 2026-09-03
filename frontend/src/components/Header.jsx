@@ -1,15 +1,36 @@
 import React from 'react';
-import { Radio } from 'lucide-react';
+import { Radio, Sliders, ListPlus } from 'lucide-react';
 import StatusPill from './common/StatusPill';
 
-export default function Header({ isConnected }) {
+export default function Header({ isConnected, onOpenSettings, onExportPlaylist }) {
   return (
     <header className="header">
       <div className="header-content">
         <Radio className="logo-icon" size={28} />
         <h1>Gemini Radio AI</h1>
       </div>
-      <StatusPill isConnected={isConnected} />
+      
+      <div className="header-actions">
+        <button 
+          className="header-action-btn"
+          onClick={onExportPlaylist}
+          title="Exportar sesión de hoy como Playlist"
+        >
+          <ListPlus size={19} />
+          <span className="btn-label">Guardar Playlist</span>
+        </button>
+
+        <button 
+          className="header-action-btn"
+          onClick={onOpenSettings}
+          title="Ajustes de la Radio"
+        >
+          <Sliders size={19} />
+          <span className="btn-label">Ajustes</span>
+        </button>
+
+        <StatusPill isConnected={isConnected} />
+      </div>
     </header>
   );
 }

@@ -2,8 +2,9 @@ import os
 import random
 import json
 import re
+from datetime import datetime
 from fastapi import FastAPI, Query
-from ytmusicapi import YTMusic
+from ytmusicapi import YTMusic, parsers
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 from dotenv import load_dotenv
@@ -26,6 +27,8 @@ current_source = None
 disliked_artists = set() 
 currently_playing_id = None
 currently_playing_title = ""
+current_mode = "song"
+current_mode_param = ""
 
 def get_yt():
     global yt_client, auth_status
@@ -71,29 +74,181 @@ def get_accurate_metadata(yt, video_id):
     except: pass
     return {"videoId": video_id, "title": "YouTube Video", "artist": "Link"}
 
-def set_queue(tracks, source_name, clear=True):
-    global current_queue, current_source, currently_playing_id
+def get_song_radio(yt, video_id, limit=25):
+    """Obtiene la radio automática oficial de YouTube Music para un video dado usando la playlist RDAMVM"""
+    try:
+        res = yt._send_request('next', {'playlistId': 'RDAMVM' + video_id, 'isAudioOnly': True})
+        tabs = res.get('contents', {}).get('singleColumnMusicWatchNextResultsRenderer', {}).get('tabbedRenderer', {}).get('watchNextTabbedResultsRenderer', {}).get('tabs', [])
+        if tabs:
+            mq = tabs[0].get('tabRenderer', {}).get('content', {}).get('musicQueueRenderer', {})
+            ppr = mq.get('content', {}).get('playlistPanelRenderer', {})
+            contents = ppr.get('contents', [])
+            if contents:
+                tracks = parsers.watch.parse_watch_playlist(contents)
+                clean_tracks = []
+                for t in tracks:
+                    v_id = t.get('videoId')
+                    if v_id and v_id != video_id:
+                        artist_name = t.get('artist') or (t.get('artists', [{}])[0].get('name') if t.get('artists') else 'Unknown')
+                        clean_tracks.append({
+                            'videoId': v_id,
+                            'title': t.get('title', 'Unknown'),
+                            'artist': artist_name,
+                            'artists': t.get('artists', [])
+                        })
+                print(f"DEBUG: get_song_radio generó {len(clean_tracks)} canciones coherentes.")
+                return clean_tracks[:limit]
+    except Exception as e:
+        print(f"DEBUG: Error en get_song_radio para {video_id}: {str(e)}")
+    return []
+
+def set_queue(tracks, source_name, clear=True, filter_history=True):
+    global current_queue, current_source, currently_playing_id, played_history
     if clear: current_queue = []
     new_entries = []
     existing_ids = {s['videoId'] for s in current_queue}
     if currently_playing_id: existing_ids.add(currently_playing_id)
     
+    # Excluir canciones ya reproducidas en la sesión para evitar repeticiones
+    history_ids = set()
+    if filter_history and played_history:
+        history_ids = {p['videoId'] for p in played_history if p.get('videoId')}
+    
     for t in tracks:
         v_id = t.get('videoId')
-        if v_id and v_id not in existing_ids:
-            artist = t['artists'][0]['name'] if t.get('artists') else "Unknown"
+        if v_id and v_id not in existing_ids and v_id not in history_ids:
+            artist = t.get('artist') or (t['artists'][0]['name'] if t.get('artists') else "Unknown")
             if artist.lower() not in [a.lower() for a in disliked_artists]:
                 new_entries.append({"videoId": v_id, "title": t.get('title', 'Unknown'), "artist": artist})
                 existing_ids.add(v_id)
+
+    # Salvaguarda: si todas las sugerencias de la radio ya se escucharon (sesión muy larga),
+    # permitir temas que no estén en las últimas 15 canciones escuchadas
+    if not new_entries and tracks and history_ids:
+        recent_ids = {p['videoId'] for p in played_history[:15] if p.get('videoId')}
+        for t in tracks:
+            v_id = t.get('videoId')
+            if v_id and v_id not in existing_ids and v_id not in recent_ids:
+                artist = t.get('artist') or (t['artists'][0]['name'] if t.get('artists') else "Unknown")
+                if artist.lower() not in [a.lower() for a in disliked_artists]:
+                    new_entries.append({"videoId": v_id, "title": t.get('title', 'Unknown'), "artist": artist})
+                    existing_ids.add(v_id)
     
     if clear: current_queue = new_entries; current_source = source_name
     else: current_queue = new_entries + current_queue
     current_queue = current_queue[:100]
 
+def get_artist_discography_tracks(yt, artist_query):
+    """Obtiene canciones exclusivas de un artista para el Modo Artista"""
+    clean = re.sub(r'^(?:pon(?:me)?|reproduce|toca|quiero\s+escuchar|escuchar|busca|búscame)\s+(?:a\s+|de\s+)?', '', artist_query, flags=re.IGNORECASE)
+    clean = re.sub(r'^(?:a|de|el|la|los|las|solo)\s+', '', clean, flags=re.IGNORECASE)
+    clean = re.sub(r'\b(?:album|álbum|cancion|canción|playlist|musica|música|discografia|discografía)\b', '', clean, flags=re.IGNORECASE).strip()
+
+    artist_res = yt.search(clean or artist_query, filter="artists")
+    if not artist_res:
+        artist_res = yt.search(clean or artist_query)
+
+    if not artist_res:
+        return None, []
+
+    artist_id = artist_res[0].get('browseId')
+    artist_name = artist_res[0].get('artist') or artist_res[0].get('name') or clean
+
+    tracks = []
+    if artist_id:
+        try:
+            artist_data = yt.get_artist(artist_id)
+            songs_sec = artist_data.get('songs', {})
+            if isinstance(songs_sec, dict):
+                pl_id = songs_sec.get('browseId')
+                if pl_id:
+                    pl = yt.get_playlist(pl_id, limit=50)
+                    tracks = pl.get('tracks', [])
+                elif 'results' in songs_sec:
+                    tracks = songs_sec.get('results', [])
+        except Exception as e:
+            print(f"DEBUG: Error al obtener discografía de {artist_name}: {e}")
+
+    clean_name_lower = artist_name.lower()
+    if len(tracks) < 15:
+        search_songs = yt.search(f"{artist_name}", filter="songs")
+        for s in search_songs:
+            s_artists = [a.get('name', '').lower() for a in s.get('artists', [])]
+            if any(clean_name_lower in a or a in clean_name_lower for a in s_artists):
+                if s.get('videoId') and s['videoId'] not in {t.get('videoId') for t in tracks}:
+                    tracks.append(s)
+
+    clean_tracks = []
+    for t in tracks:
+        v_id = t.get('videoId')
+        if v_id:
+            artist = t.get('artist') or (t['artists'][0]['name'] if t.get('artists') else artist_name)
+            clean_tracks.append({
+                "videoId": v_id,
+                "title": t.get('title', 'Unknown'),
+                "artist": artist
+            })
+
+    return artist_name, clean_tracks
+
+def ensure_queue_populated(yt):
+    global current_queue, currently_playing_id, played_history, current_mode, current_mode_param
+    if current_queue:
+        return
+    # Si estamos en Modo Artista, mantener al artista sin saltar a otros músicos:
+    if current_mode == "artist" and current_mode_param:
+        _, more_tracks = get_artist_discography_tracks(yt, current_mode_param)
+        if more_tracks:
+            set_queue(more_tracks, f"Solo {current_mode_param}", clear=True, filter_history=True)
+            return
+    source_id = currently_playing_id or (played_history[0]['videoId'] if played_history else None)
+    if source_id:
+        radio = get_song_radio(yt, source_id, limit=25)
+        if radio:
+            set_queue(radio, "Mix Automático")
+            return
+    # Sesión inicial nueva: Cargar favoritos/personal mix
+    if get_personal_mix() and current_queue:
+        return
+    # Fallback inicial a música chill
+    init_tracks = yt.search("Daniel Caesar Mac Miller Frank Ocean", filter="songs")
+    if init_tracks:
+        set_queue(init_tracks, "Sesión Inicial")
+
+@app.get("/queue/peek")
+def peek_queue():
+    global current_queue
+    yt = get_yt()
+    ensure_queue_populated(yt)
+    if current_queue:
+        return {"nextSong": current_queue[0], "queueLength": len(current_queue)}
+    return {"nextSong": None, "queueLength": 0}
+
+@app.post("/queue/pop")
+def pop_queue():
+    global current_queue, played_history, currently_playing_id, currently_playing_title
+    yt = get_yt()
+    ensure_queue_populated(yt)
+    if current_queue:
+        song = current_queue.pop(0)
+        currently_playing_id = song['videoId']
+        currently_playing_title = song['title']
+        played_history.insert(0, song)
+        return song
+    return {"error": "No hay canciones en la cola"}
+
 @app.get("/status")
 def status():
+    global current_mode, current_mode_param
     get_yt()
-    return {"status": auth_status, "queue": current_queue, "history": played_history, "source": current_source}
+    return {
+        "status": auth_status,
+        "queue": current_queue,
+        "history": played_history,
+        "source": current_source,
+        "mode": current_mode,
+        "modeParam": current_mode_param
+    }
 
 @app.get("/history")
 def get_history_list(limit: int = 20):
@@ -163,7 +318,7 @@ def get_personal_mix():
 
 @app.get("/search")
 def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
-    global current_queue, current_source, played_history, currently_playing_id, currently_playing_title, disliked_artists
+    global current_queue, current_source, played_history, currently_playing_id, currently_playing_title, disliked_artists, current_mode, current_mode_param
     try:
         yt = get_yt()
         q_raw = q or ""
@@ -171,40 +326,80 @@ def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
 
         # PRIORIDAD 0: COMANDO "SIGUIENTE" (Debe ser lo primero de todo)
         clean_q = q_raw.lower().replace("album", "").replace("cancion", "").replace("playlist", "").strip()
-        if not clean_q or any(w in clean_q for w in ["siguiente", "next", "otra", "cambia"]):
+        if not clean_q or any(w in clean_q for w in ["siguiente", "next", "otra"]):
+            # 1. Si ya hay canciones en la cola, tomar la siguiente
             if current_queue:
                 song = current_queue.pop(0)
                 played_history.insert(0, song); currently_playing_id = song['videoId']; return song
-            # Si no hay cola, forzamos que busque algo para no quedarse callado
-            if not clean_q: clean_q = "pop hits"
+            
+            # 2. Si la cola está vacía pero estamos en MODO ARTISTA: recargar MÁS del mismo artista
+            if current_mode == "artist" and current_mode_param:
+                _, more_tracks = get_artist_discography_tracks(yt, current_mode_param)
+                if more_tracks:
+                    set_queue(more_tracks, f"Solo {current_mode_param}", clear=True, filter_history=True)
+                    if current_queue:
+                        song = current_queue.pop(0)
+                        played_history.insert(0, song); currently_playing_id = song['videoId']; return song
+
+            # 3. Si no es modo artista, radio de YouTube Music
+            source_id = currently_playing_id or (played_history[0]['videoId'] if played_history else None)
+            if source_id:
+                radio_tracks = get_song_radio(yt, source_id, limit=25)
+                if radio_tracks:
+                    set_queue(radio_tracks, "Mix Automático")
+                    if current_queue:
+                        song = current_queue.pop(0)
+                        played_history.insert(0, song); currently_playing_id = song['videoId']; return song
+            
+            # 4. Si la sesión es completamente NUEVA (recién entra el usuario y presiona siguiente):
+            if get_personal_mix():
+                if current_queue:
+                    song = current_queue.pop(0)
+                    played_history.insert(0, song); currently_playing_id = song['videoId']; return song
+            
+            # 5. Fallback chill inicial
+            initial_results = yt.search("Daniel Caesar Mac Miller Frank Ocean", filter="songs")
+            if initial_results:
+                first = initial_results[0]
+                first_artist = first['artists'][0]['name'] if first.get('artists') else "Daniel Caesar"
+                res_s = {"videoId": first['videoId'], "title": first['title'], "artist": first_artist}
+                played_history.insert(0, res_s)
+                currently_playing_id = res_s['videoId']
+                set_queue(initial_results[1:], "Sesión Inicial")
+                return res_s
+
+            return {"error": "No se pudo iniciar la reproducción"}
 
         # PRIORIDAD 1: LINK DE PLAYLIST
         if p_id:
             data = yt.get_playlist(p_id, limit=50)
             tracks = data.get("tracks", [])
             if tracks:
-                set_queue(tracks[1:], f"Playlist: {data['title']}")
+                current_mode = "playlist"
+                current_mode_param = data.get('title', 'Playlist')
+                set_queue(tracks[1:], f"Playlist: {data['title']}", filter_history=False)
                 res = {"videoId": tracks[0]['videoId'], "title": tracks[0]['title'], "artist": tracks[0]['artists'][0]['name'] if tracks[0].get('artists') else "Unknown"}
                 currently_playing_id = res['videoId']; played_history.insert(0, res); return res
 
         # PRIORIDAD 2: LINK DE VIDEO
         if v_id:
             res = get_accurate_metadata(yt, v_id)
+            current_mode = "song"
+            current_mode_param = ""
             currently_playing_id = v_id; currently_playing_title = res['title']
             played_history.insert(0, res); return res
 
-        # ¡ARREGLO 1! Limpiamos el texto sin destruir palabras
+        # Limpiamos el texto sin destruir palabras
         clean_q = q_raw.lower()
         for word in ["playlist", "album", "álbum", "canciones", "canción", "cancion"]:
             clean_q = clean_q.replace(word, "")
         clean_q = clean_q.strip()
 
-        # NUEVA PRIORIDAD 2.5: BUSCAR EN TUS PROPIAS PLAYLISTS PRIMERO
-        if auth_status == "logeado" and clean_q:
+        # NUEVA PRIORIDAD 2.5: BUSCAR EN TUS PROPIAS PLAYLISTS PRIMERO (solo si no es modo artista)
+        if type != "artist" and auth_status == "logeado" and clean_q:
             lib = yt.get_library_playlists(limit=100)
             target_playlist = next((p for p in lib if clean_q in p['title'].lower()), None)
             
-            # ¡ARREGLO 2! Fallback inteligente: Si buscas "favoritas", busca tu lista "Favorite Songs"
             if not target_playlist and "favorit" in clean_q:
                 target_playlist = next((p for p in lib if "favorit" in p['title'].lower()), None)
             
@@ -212,13 +407,14 @@ def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
                 data = yt.get_playlist(target_playlist['playlistId'], limit=50)
                 tracks = data.get("tracks", [])
                 if tracks:
-                    set_queue(tracks[1:], f"Tu Playlist: {data['title']}")
+                    current_mode = "playlist"
+                    current_mode_param = data['title']
+                    set_queue(tracks[1:], f"Tu Playlist: {data['title']}", filter_history=False)
                     res_s = {"videoId": tracks[0]['videoId'], "title": tracks[0]['title'], "artist": tracks[0]['artists'][0]['name'] if tracks[0].get('artists') else "Unknown"}
                     currently_playing_id = res_s['videoId']; played_history.insert(0, res_s); return res_s
 
-        # PRIORIDAD 3: MODO PERSONAL GENÉRICO
-        # Usamos "favorit" para atrapar "favoritos", "favoritas" y "favorite"
-        if any(w in clean_q for w in ["historial", "favorit", "mi musica", "mas escuchado", "mis me gusta", "liked"]):
+        # PRIORIDAD 3: MODO PERSONAL GENÉRICO (si no es modo artista)
+        if type != "artist" and any(w in clean_q for w in ["historial", "favorit", "mi musica", "mas escuchado", "mis me gusta", "liked"]):
             if get_personal_mix():
                 if current_queue:
                     song = current_queue.pop(0)
@@ -226,52 +422,88 @@ def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
             else:
                 return {"error": "No pude acceder a tus favoritos. ¿Estás logueado?"}
 
-        # 4. MODO ARTISTA
+        # 4. MODO ARTISTA (Petición estricta de discografía de ese músico)
         if type == "artist":
-            res = yt.search(clean_q, filter="songs")
-            only_artist = [s for s in res if s.get('artists') and clean_q in s['artists'][0]['name'].lower()]
-            if only_artist:
-                set_queue(only_artist[1:], f"Solo {only_artist[0]['artists'][0]['name']}")
-                res_s = {"videoId": only_artist[0]['videoId'], "title": only_artist[0]['title'], "artist": only_artist[0]['artists'][0]['name']}
-                currently_playing_id = res_s['videoId']; played_history.insert(0, res_s); return res_s
+            artist_name, artist_tracks = get_artist_discography_tracks(yt, clean_q or q_raw)
+            if artist_tracks:
+                current_mode = "artist"
+                current_mode_param = artist_name
+                first_song = artist_tracks[0]
+                currently_playing_id = first_song['videoId']
+                currently_playing_title = first_song['title']
+                played_history.insert(0, first_song)
+                # Poblar la cola con canciones de este artista únicamente
+                set_queue(artist_tracks[1:], f"Solo {artist_name}", clear=True, filter_history=True)
+                print(f"DEBUG: MODO ARTISTA activado para '{artist_name}'. {len(artist_tracks)} canciones en cola exclusiva.")
+                return first_song
 
-        # 5. MODO ALBUM
+        # 5. MODO ALBUM (Cargar el álbum completo en orden)
         if type == "album":
-            res = yt.search(clean_q, filter="albums")
+            album_q = re.sub(r'^(?:pon(?:me)?|reproduce|toca|álbum|album|disco)\s+', '', clean_q or q_raw, flags=re.IGNORECASE).strip()
+            res = yt.search(album_q or clean_q, filter="albums")
+            if not res:
+                res = yt.search(clean_q, filter="albums")
             if res:
-                data = yt.get_album(res[0]['browseId'])
-                tracks = data.get("tracks", [])
-                if tracks:
-                    set_queue(tracks[1:], f"Álbum: {data['title']}")
-                    res_s = {"videoId": tracks[0]['videoId'], "title": tracks[0]['title'], "artist": data.get('artist', 'Various')}
-                    currently_playing_id = res_s['videoId']; played_history.insert(0, res_s); return res_s
+                album_id = res[0].get('browseId')
+                if album_id:
+                    data = yt.get_album(album_id)
+                    tracks = data.get("tracks", [])
+                    if tracks:
+                        current_mode = "album"
+                        current_mode_param = data.get('title', 'Álbum')
+                        first_track = tracks[0]
+                        first_artist = data.get('artist') or (first_track['artists'][0]['name'] if first_track.get('artists') else 'Various')
+                        res_s = {
+                            "videoId": first_track['videoId'],
+                            "title": first_track['title'],
+                            "artist": first_artist
+                        }
+                        currently_playing_id = res_s['videoId']
+                        currently_playing_title = res_s['title']
+                        played_history.insert(0, res_s)
+                        # Meter todas las canciones del álbum en orden
+                        set_queue(tracks[1:], f"Álbum: {data['title']}", clear=True, filter_history=False)
+                        print(f"DEBUG: MODO ÁLBUM activado para '{data['title']}'. {len(tracks)} canciones en orden.")
+                        return res_s
 
-        # 6. MODO PLAYLIST
+        # 6. MODO PLAYLIST (Cargar playlist completa)
         if type == "playlist":
-            res = yt.search(clean_q, filter="playlists")
+            playlist_q = re.sub(r'^(?:pon(?:me)?|reproduce|toca|playlist|lista)\s+', '', clean_q or q_raw, flags=re.IGNORECASE).strip()
+            res = yt.search(playlist_q or clean_q, filter="playlists")
             if res:
-                data = yt.get_playlist(res[0]['playlistId'], limit=50)
-                tracks = data.get("tracks", [])
-                if tracks:
-                    set_queue(tracks[1:], f"Playlist: {data['title']}")
-                    res_s = {"videoId": tracks[0]['videoId'], "title": tracks[0]['title'], "artist": tracks[0]['artists'][0]['name'] if tracks[0].get('artists') else "Unknown"}
-                    currently_playing_id = res_s['videoId']; played_history.insert(0, res_s); return res_s
+                pl_id = res[0].get('playlistId') or res[0].get('browseId')
+                if pl_id:
+                    data = yt.get_playlist(pl_id, limit=50)
+                    tracks = data.get("tracks", [])
+                    if tracks:
+                        current_mode = "playlist"
+                        current_mode_param = data.get('title', 'Playlist')
+                        first_track = tracks[0]
+                        first_artist = first_track.get('artist') or (first_track['artists'][0]['name'] if first_track.get('artists') else 'Unknown')
+                        res_s = {
+                            "videoId": first_track['videoId'],
+                            "title": first_track['title'],
+                            "artist": first_artist
+                        }
+                        currently_playing_id = res_s['videoId']
+                        currently_playing_title = res_s['title']
+                        played_history.insert(0, res_s)
+                        set_queue(tracks[1:], f"Playlist: {data['title']}", clear=True, filter_history=False)
+                        print(f"DEBUG: MODO PLAYLIST activado para '{data['title']}'. {len(tracks)} canciones.")
+                        return res_s
 
-        # 7. MODO CANCIÓN / SIGUIENTE (Por defecto)
-        if not clean_q or any(w in clean_q for w in ["siguiente", "next", "otra", "cambia"]):
-            if current_queue:
-                song = current_queue.pop(0)
-                played_history.insert(0, song); currently_playing_id = song['videoId']; return song
-            clean_q = "pop hits"
-
+        # 7. MODO CANCIÓN / BÚSQUEDA GENERAL
+        current_mode = "song"
+        current_mode_param = ""
         results = yt.search(clean_q, filter="songs")
         if results:
             song = next((r for r in results if r['artists'][0]['name'].lower() not in [a.lower() for a in disliked_artists] if r.get('artists')), results[0])
             currently_playing_id = song['videoId']
             try:
-                radio = yt.get_watch_playlist(videoId=song['videoId'], limit=20)
-                set_queue(radio.get("tracks", []), f"Mix: {song['title']}")
-            except: pass
+                radio_tracks = get_song_radio(yt, song['videoId'], limit=25)
+                set_queue(radio_tracks, f"Mix: {song['title']}")
+            except Exception as e:
+                print(f"DEBUG: Error generando radio en search: {e}")
             played_history.insert(0, song)
             return {"videoId": song['videoId'], "title": song['title'], "artist": song['artists'][0]['name'] if song.get('artists') else "Unknown"}
             
@@ -300,13 +532,13 @@ def handle_like(video_id: str, artist: str, current_title: Optional[str] = Query
     currently_playing_id = video_id; currently_playing_title = current_title or ""
     try:
         yt = get_yt()
-        # LIKE REAL EN YOUTUBE
         yt.rate_song(video_id, 'LIKE')
         
-        radio = yt.get_watch_playlist(videoId=video_id, limit=15)
-        set_queue(radio.get("tracks", []), f"Basado en {artist}", clear=False)
+        radio_tracks = get_song_radio(yt, video_id, limit=20)
+        set_queue(radio_tracks, f"Basado en {artist}", clear=False)
         return {"status": "liked"}
-    except: return {"error": "Error"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.get("/history")
 def get_history_list(limit: int = 20):
@@ -321,21 +553,96 @@ def handle_dislike(video_id: str, artist: str):
     
     try:
         yt = get_yt()
-        # DISLIKE REAL EN YOUTUBE
         yt.rate_song(video_id, 'DISLIKE')
     except: pass
 
     # Intentar rellenar la cola con favoritos/historial dinámico
     success = get_personal_mix()
     
-    # Si no hay mix personal (invitado), preparamos una búsqueda de algo "random" pero popular
+    # Si no hay mix personal (invitado), preparamos radio coherente del historial anterior o fallback chill
     if not success:
         yt = get_yt()
-        fallback_results = yt.search("top hits 2024", filter="songs")
+        prior_artist = played_history[1]['artist'] if len(played_history) > 1 else "Mac Miller"
+        fallback_results = yt.search(f"{prior_artist} chill soul", filter="songs")
         if fallback_results:
-            set_queue(fallback_results, "Mix General (Invitado)")
+            set_queue(fallback_results, f"Mix Coherente {prior_artist}")
     
     return {"status": "disliked", "has_queue": len(current_queue) > 0}
+
+def get_song_lyrics(yt, video_id: str):
+    try:
+        res = yt._send_request('next', {'videoId': video_id, 'isAudioOnly': True})
+        tabs = res.get('contents', {}).get('singleColumnMusicWatchNextResultsRenderer', {}).get('tabbedRenderer', {}).get('watchNextTabbedResultsRenderer', {}).get('tabs', [])
+        for t in tabs:
+            tr = t.get('tabRenderer', {})
+            endpoint = tr.get('endpoint', {}).get('browseEndpoint', {}).get('browseId')
+            if endpoint and ('MPLY' in endpoint or 'lyrics' in str(tr.get('title', '')).lower()):
+                lyrics_data = yt.get_lyrics(endpoint)
+                if lyrics_data and lyrics_data.get('lyrics'):
+                    return {
+                        "lyrics": lyrics_data.get('lyrics'),
+                        "source": lyrics_data.get('source', 'YouTube Music')
+                    }
+    except Exception as e:
+        print(f"Error obteniendo letras para {video_id}: {e}")
+    return {"lyrics": None, "source": None}
+
+@app.get("/lyrics/{video_id}")
+def get_lyrics(video_id: str):
+    yt = get_yt()
+    return get_song_lyrics(yt, video_id)
+
+@app.post("/playlist/export")
+def export_playlist(title: str = None):
+    global played_history
+    if not played_history:
+        return {"error": "No hay canciones en la sesión de hoy para exportar"}
+
+    # Recopilar IDs únicos de las canciones reproducidas hoy
+    video_ids = []
+    seen = set()
+    for s in played_history:
+        vid = s.get('videoId')
+        if vid and vid not in seen:
+            seen.add(vid)
+            video_ids.append(vid)
+
+    if not video_ids:
+        return {"error": "No se encontraron canciones válidas"}
+
+    now_str = datetime.now().strftime("%d/%m/%Y")
+    playlist_title = title or f"Gemini Radio - Sesión {now_str}"
+    description = f"Generada por Gemini AI DJ Radio con {len(video_ids)} canciones reproducidas en la sesión."
+
+    # Si está logueado en YouTube Music, crear la playlist oficial en su cuenta
+    yt = get_yt()
+    if auth_status == "logeado":
+        try:
+            pl_id = yt.create_playlist(
+                title=playlist_title,
+                description=description,
+                privacy_status="PRIVATE",
+                video_ids=video_ids[:50]
+            )
+            return {
+                "success": True,
+                "type": "youtube_music",
+                "playlistId": pl_id,
+                "url": f"https://music.youtube.com/playlist?list={pl_id}",
+                "count": len(video_ids)
+            }
+        except Exception as e:
+            print(f"Error creando playlist oficial: {e}")
+
+    # Modo Invitado o Fallback: Enlace directo que abre todas las canciones juntas en YouTube
+    yt_watch_url = f"https://www.youtube.com/watch_videos?video_ids={','.join(video_ids[:50])}"
+    return {
+        "success": True,
+        "type": "youtube_instant",
+        "url": yt_watch_url,
+        "count": len(video_ids),
+        "video_ids": video_ids
+    }
 
 if __name__ == "__main__":
     import uvicorn

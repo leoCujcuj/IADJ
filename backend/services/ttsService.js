@@ -10,10 +10,30 @@ if (!fs.existsSync(audioFolder)) {
   fs.mkdirSync(audioFolder, { recursive: true });
 }
 
+const crypto = require('crypto');
+
 async function generateTTS(text) {
+  if (!text || !text.trim()) return null;
   if (!ELEVENLABS_API_KEY) {
     console.warn("Advertencia: No hay ELEVENLABS_API_KEY configurada.");
     return null;
+  }
+
+  // Normalizar texto para clave de caché
+  const cleanText = text.trim().toLowerCase().replace(/\s+/g, ' ');
+  const textHash = crypto.createHash('md5').update(`${ELEVENLABS_VOICE_ID}_${cleanText}`).digest('hex');
+  const fileName = `tts_cache_${textHash}.mp3`;
+  const filePath = path.join(audioFolder, fileName);
+
+  // 1. Si ya existe en caché, retornarlo inmediatamente (0 llamadas a la API)
+  if (fs.existsSync(filePath)) {
+    try {
+      const stats = fs.statSync(filePath);
+      if (stats.size > 100) {
+        console.log(`[TTS CACHE HIT - $0]: "${text.slice(0, 35)}..." reutilizado de caché local.`);
+        return `/audio/${fileName}`;
+      }
+    } catch (e) {}
   }
   
   try {
@@ -27,10 +47,8 @@ async function generateTTS(text) {
       responseType: 'arraybuffer'
     });
 
-    const fileName = `dj_voice_${Date.now()}.mp3`;
-    const filePath = path.join(audioFolder, fileName);
     fs.writeFileSync(filePath, response.data);
-    console.log(`Voz generada con éxito: ${fileName}`);
+    console.log(`Voz generada y guardada en caché: ${fileName}`);
     return `/audio/${fileName}`;
   } catch (error) {
     if (error.response) {

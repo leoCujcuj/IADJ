@@ -11,7 +11,7 @@ RUN npm install
 # Copiar el código del frontend
 COPY . .
 
-EXPOSE 5173
+EXPOSE 5174
 
 # Arrancar el servidor de desarrollo de Vite
 CMD ["npm", "run", "dev"]

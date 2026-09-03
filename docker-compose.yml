@@ -31,6 +31,8 @@ services:
       - DB_PASS=admin
     depends_on:
       - db
+    volumes:
+      - ./backend/headers.json:/app/headers.json
     restart: always
 
   node-backend:
@@ -56,7 +58,9 @@ services:
       dockerfile: Dockerfile
     container_name: youtube-frontend
     ports:
-      - "5173:5173"
+      - "5174:5174"
+    volumes:
+      - ./frontend/src:/app/src
     depends_on:
       - node-backend
     restart: always

@@ -74,8 +74,13 @@ export default function ChatSection({
         <input 
           type="text" 
           value={message} 
-          onChange={e => setMessage(e.target.value)} 
-          placeholder={`Pedir ${activeMode?.placeholder || 'canción'}...`} 
+          onChange={e => {
+            if (isListening) {
+              toggleListening();
+            }
+            setMessage(e.target.value);
+          }} 
+          placeholder={isListening ? "🎤 Escuchando... habla ahora..." : `Pedir ${activeMode?.placeholder || 'canción'}...`} 
         />
         <button type="submit" className="send-btn" disabled={loading}>
           <Send size={18} />

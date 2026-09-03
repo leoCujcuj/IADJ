@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { OPENROUTER_API_KEY, DJ_SYSTEM_PROMPT } = require('../config/constants');
 
-async function getDJDecision(prompt) {
+async function getDJDecision(prompt, customSystemPrompt = null) {
   if (!OPENROUTER_API_KEY) return null;
   const models = ["openrouter/auto", "google/gemini-2.0-flash-001"];
 
@@ -10,7 +10,7 @@ async function getDJDecision(prompt) {
       const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
         model: model,
         messages: [
-          { role: "system", content: DJ_SYSTEM_PROMPT },
+          { role: "system", content: customSystemPrompt || DJ_SYSTEM_PROMPT },
           { role: "user", content: prompt }
         ],
         response_format: { type: "json_object" }
@@ -23,10 +23,12 @@ async function getDJDecision(prompt) {
       });
 
       if (response.data?.choices?.[0]?.message?.content) {
-        return JSON.parse(response.data.choices[0].message.content);
+        let raw = response.data.choices[0].message.content.trim();
+        raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+        return JSON.parse(raw);
       }
     } catch (error) {
-      console.error(`Fallo en modelo ${model}`);
+      console.error(`Fallo en modelo ${model}:`, error.message);
     }
   }
   return null;

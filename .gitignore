@@ -12,6 +12,9 @@ frontend/.env
 
 # YouTube Music API Credentials (SENSITIVE)
 backend/headers.json
+headers.json
+headers_auth.json
+*headers*.json
 
 # Python cache & virtualenv
 __pycache__/

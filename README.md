@@ -9,7 +9,7 @@ Este proyecto es un orquestador e interfaz interactiva para un DJ de radio impul
 El sistema está dividido en cuatro componentes principales orquestados con **Docker**:
 
 1. **`frontend`** (React + Vite): Interfaz web de usuario.
-   - Puerto: `5173`
+   - Puerto: `5174`
 2. **`node-backend`** (Node.js + Express): Servidor orquestador que gestiona la lógica del DJ, llamadas a OpenRouter y ElevenLabs para generación de voz.
    - Puerto: `3001`
 3. **`python-service`** (Python + FastAPI): Servicio que interactúa con la API de YouTube Music (`ytmusicapi`) para buscar canciones, gestionar colas, reproducir e integrar me gustas.
@@ -62,7 +62,7 @@ docker compose up --build
 
 Esto compilará las imágenes necesarias, inicializará la base de datos PostgreSQL, y levantará los servicios.
 
-* Acceso a la aplicación web (Frontend): [http://localhost:5173](http://localhost:5173)
+* Acceso a la aplicación web (Frontend): [http://localhost:5174](http://localhost:5174)
 * Documentación interactiva de la API Python (FastAPI): [http://localhost:8000/docs](http://localhost:8000/docs)
 * Servidor Orquestador (Node): [http://localhost:3001](http://localhost:3001)
 

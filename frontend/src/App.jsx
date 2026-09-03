@@ -4,6 +4,9 @@ import Header from './components/Header';
 import ChatSection from './components/ChatSection';
 import PlayerCard from './components/PlayerCard';
 import QueueSection from './components/QueueSection';
+import SettingsModal from './components/SettingsModal';
+import LyricsSidebar from './components/LyricsSidebar';
+import TriviaModal from './components/TriviaModal';
 import useDJRadio from './hooks/useDJRadio';
 
 function App() {
@@ -36,12 +39,36 @@ function App() {
     handleNext,
     handleLike,
     handleDislike,
-    chatEndRef
+    chatEndRef,
+    frequency,
+    setFrequency,
+    personality,
+    setPersonality,
+    crossfade,
+    setCrossfade,
+    isSettingsOpen,
+    setIsSettingsOpen,
+    isLyricsOpen,
+    setIsLyricsOpen,
+    isTriviaOpen,
+    setIsTriviaOpen,
+    currentTrivia,
+    loadingTrivia,
+    handleOpenTrivia,
+    handleAnotherTrivia,
+    handleAskDJMore,
+    handleShareTriviaToChat,
+    handleExportPlaylist,
+    playerRef
   } = useDJRadio();
 
   return (
-    <div className="app-container">
-      <Header isConnected={isConnected} />
+    <div className={`app-container ${isLyricsOpen ? 'with-lyrics-open' : ''}`}>
+      <Header 
+        isConnected={isConnected} 
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onExportPlaylist={handleExportPlaylist}
+      />
 
       <main className="main-content">
         <ChatSection
@@ -70,6 +97,9 @@ function App() {
               handleLike={handleLike}
               handleDislike={handleDislike}
               handleNext={handleNext}
+              onOpenLyrics={() => setIsLyricsOpen(prev => !prev)}
+              onOpenTrivia={handleOpenTrivia}
+              loadingTrivia={loadingTrivia}
             />
 
             <QueueSection
@@ -85,6 +115,35 @@ function App() {
           </div>
         </section>
       </main>
+
+      <LyricsSidebar
+        isOpen={isLyricsOpen}
+        onClose={() => setIsLyricsOpen(false)}
+        currentSong={currentSong}
+        playerRef={playerRef}
+      />
+
+      <TriviaModal
+        isOpen={isTriviaOpen}
+        onClose={() => setIsTriviaOpen(false)}
+        currentSong={currentSong}
+        trivia={currentTrivia}
+        loading={loadingTrivia}
+        onAnotherTrivia={handleAnotherTrivia}
+        onAskDJMore={handleAskDJMore}
+        onShareToChat={handleShareTriviaToChat}
+      />
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        frequency={frequency}
+        setFrequency={setFrequency}
+        personality={personality}
+        setPersonality={setPersonality}
+        crossfade={crossfade}
+        setCrossfade={setCrossfade}
+      />
     </div>
   );
 }
