@@ -56,20 +56,20 @@ function isTriviaOrConversation(text) {
   if (!text) return false;
   const t = text.trim().toLowerCase();
   
-  // Si pide explícitamente reproducir/cambiar
+  // Si pide explícitamente reproducir/cambiar, saltar o da dislike, JAMÁS es trivia
   if (
-    /^(?:pon|ponme|reproduce|toca|cambia\s+a|salta|play)\b/i.test(t) ||
-    /^(?:quiero\s+escuchar|quiero\s+o[ií]r|busca|b[uú]scame)\b/i.test(t)
+    /\b(?:pon|ponme|reproduce|toca|cambia|salta|next|play|dislike|no\s+me\s+gusta|otra|siguiente)\b/i.test(t) ||
+    /\b(?:quiero\s+escuchar|quiero\s+o[ií]r|busca|b[uú]scame)\b/i.test(t)
   ) {
     return false;
   }
 
   // Si pide curiosidades, datos, anécdotas, información, preguntas
   if (
-    /(?:curiosidad|curiosidades|trivia|dato|datos|an[eé]cdota|historia|detalles?)/i.test(t) ||
-    /(?:cu[eé]ntame\s+m[aá]s|h[aá]blame\s+de|qu[eé]\s+sabes|de\s+qu[eé]\s+trata)/i.test(t) ||
-    /(?:qui[eé]n\s+(?:es|fue|escribi[oó]|compuso|canta)|cu[aá]ndo\s+sali[oó]|en\s+qu[eé]\s+a[nñ]o)/i.test(t) ||
-    /(?:qu[eé]\s+significa|por\s+qu[eé]\s+se\s+llama)/i.test(t)
+    /\b(?:curiosidad|curiosidades|trivia|dato|datos|an[eé]cdota|historia)\b/i.test(t) ||
+    /\b(?:cu[eé]ntame\s+m[aá]s|h[aá]blame\s+de|qu[eé]\s+sabes|de\s+qu[eé]\s+trata)\b/i.test(t) ||
+    /\b(?:qui[eé]n\s+(?:es|fue|escribi[oó]|compuso|canta)|cu[aá]ndo\s+sali[oó]|en\s+qu[eé]\s+a[nñ]o)\b/i.test(t) ||
+    /\b(?:qu[eé]\s+significa|por\s+qu[eé]\s+se\s+llama)\b/i.test(t)
   ) {
     return true;
   }
@@ -92,7 +92,11 @@ function isPureNextRequest(text) {
     t === 'next' ||
     t === 'salta' ||
     t === 'siguiente cancion' ||
-    t === 'otra cancion'
+    t === 'otra cancion' ||
+    t.includes('he dado dislike') ||
+    t.includes('siguiente canción dj') ||
+    t === 'dislike' ||
+    t === 'no me gusta'
   ) {
     return true;
   }
@@ -143,23 +147,30 @@ async function handleChat(req, res) {
         console.error("Error obteniendo siguiente canción de Python:", err.message);
       }
 
-      // Solo habla si targetFrequency > 0 y se alcanzó la cuota de la sesión
-      const shouldSpeak = targetFrequency > 0 && songsSinceLastDJIntervention >= targetFrequency;
+      // Habla si targetFrequency > 0 y se alcanzó la cuota, O si fue una acción de dislike explícita
+      const isDislike = /\b(?:dislike|no\s+me\s+gusta)\b/i.test(message);
+      const shouldSpeak = (targetFrequency > 0 && songsSinceLastDJIntervention >= targetFrequency) || isDislike;
 
       if (shouldSpeak && nextSong && nextSong.title) {
         songsSinceLastDJIntervention = 0; // Reiniciar contador de sesión
         const songArtist = nextSong.artist || nextSong.artists?.[0]?.name || 'el artista';
-        const prompt = `MODO: ${isLogged ? 'LOGUEADO' : 'INVITADO'}. Presenta el bloque con la siguiente canción: "${nextSong.title}" de "${songArtist}".`;
+        let prompt = `MODO: ${isLogged ? 'LOGUEADO' : 'INVITADO'}. Presenta el bloque con la siguiente canción: "${nextSong.title}" de "${songArtist}".`;
+        if (isDislike) {
+          prompt = `MODO: ${isLogged ? 'LOGUEADO' : 'INVITADO'}. El oyente descartó la canción anterior. En máximo 15 palabras, confirma relajadamente que cambiaste y presenta de una vez: "${nextSong.title}" de "${songArtist}".`;
+        }
+
         const introPrompt = DJ_INTRODUCE_SONG_PROMPT(
           nextSong.title, 
           songArtist, 
           currentSong?.title, 
           currentSong?.artist,
-          { personality, timeContext, includeTrivia: true }
+          { personality, timeContext, includeTrivia: !isDislike }
         );
         
         const djDecision = await getDJDecision(prompt, introPrompt);
-        djComment = djDecision?.locucion || `¡Seguimos con ${songArtist} y su tema ${nextSong.title}!`;
+        djComment = djDecision?.locucion || (isDislike
+          ? `¡Sin problema! Dejamos esa atrás y seguimos con ${nextSong.title} de ${songArtist}.`
+          : `¡Seguimos con ${songArtist} y su tema ${nextSong.title}!`);
         audioUrl = await generateTTS(djComment);
       }
 
@@ -198,7 +209,15 @@ REGLAS OBLIGATORIAS:
     djComment = djDecision.locucion;
 
     const isQuestionOrTrivia = isTriviaOrConversation(message);
-    const shouldChangeSong = !isQuestionOrTrivia && (djDecision.cambiar_cancion !== false) && !!djDecision.busqueda && djDecision.busqueda.trim() !== '';
+    let shouldChangeSong = !isQuestionOrTrivia && (djDecision.cambiar_cancion !== false) && !!djDecision.busqueda && djDecision.busqueda.trim() !== '';
+
+    // Salvaguarda: Si el usuario dio dislike o pidió música explícitamente, SIEMPRE debe cambiar de canción
+    if (!isQuestionOrTrivia && /\b(?:dislike|no\s+me\s+gusta|cambia|pon|ponme|reproduce|salta|otra|siguiente)\b/i.test(message)) {
+      shouldChangeSong = true;
+      if (!djDecision.busqueda || djDecision.busqueda.trim() === '') {
+        djDecision.busqueda = djDecision.artista || djDecision.cancion || (searchType === 'artist' ? 'Frank Ocean' : 'canciones recomendadas');
+      }
+    }
 
     console.log(`DJ (${searchType || 'song'}): ¿Cambiar música? ${shouldChangeSong ? 'SÍ (' + djDecision.busqueda + ')' : 'NO (respondiendo en chat sin cambiar)'} -> Locución: "${djComment}"`);
 

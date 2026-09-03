@@ -562,15 +562,30 @@ export default function useDJRadio() {
     setIsDisliked(true);
     const newStreak = dislikeStreak + 1;
     setDislikeStreak(newStreak);
+
+    // 1. Limpiar precargas previas de la canción descartada
+    preloadedDataRef.current = null;
+    preloadTriggeredRef.current = null;
+    if (preloadedAudioRef.current) {
+      try {
+        preloadedAudioRef.current.pause();
+        preloadedAudioRef.current.src = '';
+      } catch (e) {}
+      preloadedAudioRef.current = null;
+    }
+
     try {
+      // 2. Registrar el dislike en el servicio de música (YT Music rate_song DISLIKE y cola renovada)
       await fetch(`http://127.0.0.1:8000/dislike/${currentSong.videoId}?artist=${encodeURIComponent(currentSong.artist)}`, { 
         method: 'POST' 
       });
+
+      // 3. Saltar de inmediato a la siguiente canción sin demoras
       if (newStreak >= 3) {
-        handleSendMessage(null, "He dado dislike a varias canciones seguidas. DJ, cambia totalmente de estilo y pregúntame qué quiero escuchar ahora mismo.");
+        handleSendMessage(null, "He dado dislike a varias canciones seguidas. DJ, cambia totalmente de estilo y recomiéndame algo diferente.");
         setDislikeStreak(0);
       } else {
-        setTimeout(() => handleSendMessage(null, "He dado dislike. Ponme algo de mi historial o favoritos ahora mismo."), 300);
+        handleSendMessage(null, "He dado dislike. Siguiente canción DJ.");
       }
     } catch (e) { 
       setIsDisliked(false); 
