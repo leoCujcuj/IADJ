@@ -1,5 +1,5 @@
 import React from 'react';
-import { Radio, Sliders, ListPlus } from 'lucide-react';
+import { Radio, Sliders, ListPlus, Flame } from 'lucide-react';
 import StatusPill from './common/StatusPill';
 
 export default function Header({ 
@@ -7,7 +7,8 @@ export default function Header({
   onOpenSettings, 
   onExportPlaylist,
   sessionName = 'Sesión Principal',
-  onOpenSessions
+  onOpenSessions,
+  onOpenFavorites
 }) {
   return (
     <header className="header">
@@ -17,6 +18,15 @@ export default function Header({
       </div>
       
       <div className="header-actions">
+        <button 
+          className="header-action-btn favorites-header-btn"
+          onClick={onOpenFavorites}
+          title="Ver canciones favoritas en repetición"
+        >
+          <Flame size={19} className="flame-header-icon" />
+          <span className="btn-label">En Repetición</span>
+        </button>
+
         <button 
           className="header-action-btn session-action-btn"
           onClick={onOpenSessions}

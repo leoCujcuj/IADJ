@@ -48,6 +48,12 @@ export default function useDJRadio() {
   const [loadingTrivia, setLoadingTrivia] = useState(false);
   const triviaCacheRef = useRef(new Map());
 
+  // --- Estados de Canciones Favoritas en Repetición ---
+  const [repeatCount, setRepeatCount] = useState(0);
+  const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
+  const [favoritesList, setFavoritesList] = useState([]);
+  const [loadingFavorites, setLoadingFavorites] = useState(false);
+
   const frequencyRef = useRef(frequency);
   const personalityRef = useRef(personality);
   const crossfadeRef = useRef(crossfade);
@@ -134,6 +140,21 @@ export default function useDJRadio() {
       }
     } catch (e) {
       console.warn("Error cargando lista de sesiones:", e);
+    }
+  }, []);
+
+  const fetchFavorites = useCallback(async () => {
+    setLoadingFavorites(true);
+    try {
+      const res = await fetch('http://127.0.0.1:3001/api/favorites/repeats');
+      const data = await res.json();
+      if (data && Array.isArray(data.favorites)) {
+        setFavoritesList(data.favorites);
+      }
+    } catch (e) {
+      console.warn("Error cargando lista de favoritas en repetición:", e);
+    } finally {
+      setLoadingFavorites(false);
     }
   }, []);
 
@@ -547,13 +568,19 @@ export default function useDJRadio() {
     if (!currentSong || isLiked) return;
     setIsLiked(true);
     setDislikeStreak(0);
+    setRepeatCount(prev => prev + 1);
     try {
-      await fetch(`http://127.0.0.1:8000/like/${currentSong.videoId}?artist=${encodeURIComponent(currentSong.artist)}&current_title=${encodeURIComponent(currentSong.title)}`, { 
+      const res = await fetch(`http://127.0.0.1:8000/like/${currentSong.videoId}?artist=${encodeURIComponent(currentSong.artist)}&current_title=${encodeURIComponent(currentSong.title)}`, { 
         method: 'POST' 
       });
+      const data = await res.json();
+      if (data && data.repeat_count !== undefined) {
+        setRepeatCount(data.repeat_count);
+      }
       syncStatus();
     } catch (e) { 
       setIsLiked(false); 
+      setRepeatCount(prev => Math.max(0, prev - 1));
       console.error(e); 
     }
   }, [currentSong, isLiked, syncStatus]);
@@ -981,13 +1008,30 @@ export default function useDJRadio() {
 
   // Cargar video en el reproductor cuando cambia currentSong
   useEffect(() => {
-    if (!currentSong?.videoId) return;
+    if (!currentSong?.videoId) {
+      setRepeatCount(0);
+      return;
+    }
     currentSongRef.current = currentSong;
     hasRetriedFallbackRef.current = false;
     setIsLiked(false);
     setIsDisliked(false);
     preloadTriggeredRef.current = null;
     preloadedDataRef.current = null;
+
+    // Si la canción ya venía con repeatCount desde chatController, usarlo; si no, consultar al backend
+    if (currentSong.repeatCount !== undefined) {
+      setRepeatCount(currentSong.repeatCount);
+    } else {
+      fetch(`http://127.0.0.1:3001/api/favorites/count/${currentSong.videoId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.totalCount !== undefined) {
+            setRepeatCount(data.totalCount);
+          }
+        })
+        .catch(() => {});
+    }
 
     if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
       playerRef.current.loadVideoById(currentSong.videoId);
@@ -1410,6 +1454,14 @@ export default function useDJRadio() {
     setModalDialog,
     showConfirm,
     showAlert,
-    playerRef
+    playerRef,
+    // Favoritos en repetición
+    repeatCount,
+    setRepeatCount,
+    isFavoritesOpen,
+    setIsFavoritesOpen,
+    favoritesList,
+    loadingFavorites,
+    fetchFavorites
   };
 }

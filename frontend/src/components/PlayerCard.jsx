@@ -1,8 +1,9 @@
 import React from 'react';
-import { Music, ThumbsUp, ThumbsDown, SkipForward, Mic2, Sparkles, Loader2 } from 'lucide-react';
+import { Music, ThumbsUp, ThumbsDown, SkipForward, Mic2, Sparkles, Loader2, Flame } from 'lucide-react';
 
 export default function PlayerCard({
   currentSong,
+  repeatCount = 0,
   isLiked,
   isDisliked,
   handleLike,
@@ -19,9 +20,19 @@ export default function PlayerCard({
         <div className="song-header-info">
           {currentSong ? (
             <>
-              <span className="now-playing-badge">
-                <span className="live-dot"></span> Sonando ahora
-              </span>
+              <div className="song-badge-row">
+                <span className="now-playing-badge">
+                  <span className="live-dot"></span> Sonando ahora
+                </span>
+                {repeatCount >= 2 && (
+                  <span 
+                    className="repeat-badge" 
+                    title={`Has pedido o dado like a esta canción ${repeatCount} veces`}
+                  >
+                    <Flame size={13} className="repeat-badge-flame" /> En repetición ({repeatCount}x)
+                  </span>
+                )}
+              </div>
               <h2 className="song-header-title" title={currentSong.title}>
                 {currentSong.title}
               </h2>

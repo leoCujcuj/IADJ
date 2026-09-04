@@ -8,6 +8,7 @@ import SettingsModal from './components/SettingsModal';
 import LyricsSidebar from './components/LyricsSidebar';
 import TriviaModal from './components/TriviaModal';
 import SessionsModal from './components/SessionsModal';
+import FavoritesModal from './components/FavoritesModal';
 import ConfirmModal from './components/common/ConfirmModal';
 import useDJRadio from './hooks/useDJRadio';
 
@@ -75,7 +76,13 @@ function App() {
     modalDialog,
     showConfirm,
     showAlert,
-    playerRef
+    playerRef,
+    repeatCount,
+    isFavoritesOpen,
+    setIsFavoritesOpen,
+    favoritesList,
+    loadingFavorites,
+    fetchFavorites
   } = useDJRadio();
 
   return (
@@ -86,6 +93,10 @@ function App() {
         onExportPlaylist={handleExportPlaylist}
         sessionName={sessionName}
         onOpenSessions={() => setIsSessionsOpen(true)}
+        onOpenFavorites={() => {
+          fetchFavorites();
+          setIsFavoritesOpen(true);
+        }}
       />
 
       <main className="main-content">
@@ -110,6 +121,7 @@ function App() {
           <div className="player-wrapper">
             <PlayerCard
               currentSong={currentSong}
+              repeatCount={repeatCount}
               isLiked={isLiked}
               isDisliked={isDisliked}
               handleLike={handleLike}
@@ -177,6 +189,16 @@ function App() {
         onDeleteSession={handleDeleteSession}
         showConfirm={showConfirm}
         showAlert={showAlert}
+      />
+
+      <FavoritesModal
+        isOpen={isFavoritesOpen}
+        onClose={() => setIsFavoritesOpen(false)}
+        favorites={favoritesList}
+        loading={loadingFavorites}
+        onPlaySong={(song) => {
+          handleSendMessage(null, `Pon la canción ${song.title} de ${song.artist}`);
+        }}
       />
 
       {modalDialog && (

@@ -256,6 +256,18 @@ REGLAS OBLIGATORIAS:
       if (nextSong && nextSong.videoId) {
         // Precargar letras de inmediato para que la primera canción también tenga traducción lista
         preloadSongLyrics(nextSong.videoId, nextSong.title, nextSong.artist).catch(() => {});
+
+        // Registrar petición del usuario en el contador de canciones favoritas en repetición
+        try {
+          const favRes = await axios.post(`${PYTHON_SERVICE_URL}/favorites/track-request`, {
+            video_id: nextSong.videoId,
+            title: nextSong.title,
+            artist: nextSong.artist
+          }, { timeout: 3000 });
+          nextSong.repeatCount = favRes.data?.total_count || 1;
+        } catch (fErr) {
+          nextSong.repeatCount = 1;
+        }
       }
     } else {
       nextSong = null;
@@ -765,6 +777,32 @@ async function handleFallbackVideo(req, res) {
   }
 }
 
+async function handleGetFavorites(req, res) {
+  try {
+    const limit = req.query.limit || 30;
+    const response = await axios.get(`${PYTHON_SERVICE_URL}/favorites/repeats`, {
+      params: { limit },
+      timeout: 5000
+    });
+    return res.json(response.data);
+  } catch (error) {
+    console.error("Error obteniendo favoritas:", error.message);
+    return res.json({ favorites: [] });
+  }
+}
+
+async function handleGetFavoriteCount(req, res) {
+  try {
+    const { videoId } = req.params;
+    const response = await axios.get(`${PYTHON_SERVICE_URL}/favorites/count/${videoId}`, {
+      timeout: 3000
+    });
+    return res.json(response.data);
+  } catch (error) {
+    return res.json({ totalCount: 0, requestCount: 0, likeCount: 0 });
+  }
+}
+
 module.exports = {
   handleChat,
   handlePreload,
@@ -781,5 +819,7 @@ module.exports = {
   handleCreateSession,
   handleRenameSession,
   handleDeleteSession,
-  handleFallbackVideo
+  handleFallbackVideo,
+  handleGetFavorites,
+  handleGetFavoriteCount
 };

@@ -16,7 +16,9 @@ const {
   handleCreateSession,
   handleRenameSession,
   handleDeleteSession,
-  handleFallbackVideo
+  handleFallbackVideo,
+  handleGetFavorites,
+  handleGetFavoriteCount
 } = require('../controllers/chatController');
 
 router.post('/chat', handleChat);
@@ -25,6 +27,10 @@ router.post('/session/transition', handleSessionTransition);
 
 // Ruta para fallback de videos con restricción de iframe en YouTube
 router.get('/video/fallback', handleFallbackVideo);
+
+// Rutas para canciones favoritas en repetición
+router.get('/favorites/repeats', handleGetFavorites);
+router.get('/favorites/count/:videoId', handleGetFavoriteCount);
 
 // Rutas de persistencia de sesiones
 router.get('/session/current', handleGetCurrentSession);

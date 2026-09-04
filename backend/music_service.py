@@ -557,19 +557,127 @@ def move_in_queue(video_id: str, to_index: int = Query(...)):
         return {"status": "moved"}
     return {"error": "No encontrada"}
 
+class TrackRequestPayload(BaseModel):
+    video_id: str
+    title: str
+    artist: str
+
+def record_favorite_interaction(video_id: str, title: str, artist: str, interaction_type: str = "request"):
+    if not video_id:
+        return {"total_count": 0, "request_count": 0, "like_count": 0}
+    title_clean = title or "Desconocido"
+    artist_clean = artist or "Desconocido"
+    conn = get_db_connection()
+    if not conn:
+        return {"total_count": 1, "request_count": 1 if interaction_type == "request" else 0, "like_count": 1 if interaction_type == "like" else 0}
+    try:
+        cur = conn.cursor()
+        is_req = 1 if interaction_type == "request" else 0
+        is_like = 1 if interaction_type == "like" else 0
+        cur.execute("""
+            INSERT INTO song_favorites_repeats (video_id, title, artist, request_count, like_count, total_count, last_played_at)
+            VALUES (%s, %s, %s, %s, %s, 1, CURRENT_TIMESTAMP)
+            ON CONFLICT (video_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                artist = EXCLUDED.artist,
+                request_count = song_favorites_repeats.request_count + EXCLUDED.request_count,
+                like_count = song_favorites_repeats.like_count + EXCLUDED.like_count,
+                total_count = song_favorites_repeats.total_count + 1,
+                last_played_at = CURRENT_TIMESTAMP
+            RETURNING total_count, request_count, like_count;
+        """, (video_id, title_clean, artist_clean, is_req, is_like))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {
+            "video_id": video_id,
+            "title": title_clean,
+            "artist": artist_clean,
+            "total_count": row[0] if row else 1,
+            "request_count": row[1] if row else is_req,
+            "like_count": row[2] if row else is_like
+        }
+    except Exception as e:
+        print(f"Error registrando repetición favorita: {e}")
+        if conn:
+            conn.close()
+        return {"total_count": 1, "request_count": 1 if interaction_type == "request" else 0, "like_count": 1 if interaction_type == "like" else 0}
+
 @app.post("/like/{video_id}")
 def handle_like(video_id: str, artist: str, current_title: Optional[str] = Query(None)):
     global currently_playing_id, currently_playing_title
     currently_playing_id = video_id; currently_playing_title = current_title or ""
+    
+    # Registrar interacción de Like en el contador de favoritas
+    fav_data = record_favorite_interaction(video_id, current_title or currently_playing_title or "Canción", artist, "like")
+    
     try:
         yt = get_yt()
         yt.rate_song(video_id, 'LIKE')
         
         radio_tracks = get_song_radio(yt, video_id, limit=20)
         set_queue(radio_tracks, f"Basado en {artist}", clear=False)
-        return {"status": "liked"}
+        return {"status": "liked", "repeat_count": fav_data.get("total_count", 1)}
     except Exception as e:
-        return {"error": str(e)}
+        return {"status": "liked", "repeat_count": fav_data.get("total_count", 1), "error": str(e)}
+
+@app.post("/favorites/track-request")
+def track_favorite_request(payload: TrackRequestPayload):
+    data = record_favorite_interaction(payload.video_id, payload.title, payload.artist, "request")
+    return data
+
+@app.get("/favorites/repeats")
+def get_favorite_repeats(limit: int = 30):
+    conn = get_db_connection()
+    if not conn:
+        return {"favorites": []}
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT video_id, title, artist, request_count, like_count, total_count, last_played_at
+            FROM song_favorites_repeats
+            WHERE total_count >= 1
+            ORDER BY total_count DESC, last_played_at DESC
+            LIMIT %s;
+        """, (limit,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        favorites = [{
+            "videoId": r[0],
+            "title": r[1],
+            "artist": r[2],
+            "requestCount": r[3],
+            "likeCount": r[4],
+            "totalCount": r[5],
+            "lastPlayedAt": r[6].isoformat() if r[6] else None
+        } for r in rows]
+        return {"favorites": favorites}
+    except Exception as e:
+        print(f"Error obteniendo favoritos: {e}")
+        if conn:
+            conn.close()
+        return {"favorites": []}
+
+@app.get("/favorites/count/{video_id}")
+def get_favorite_count(video_id: str):
+    conn = get_db_connection()
+    if not conn:
+        return {"totalCount": 0, "requestCount": 0, "likeCount": 0}
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT total_count, request_count, like_count FROM song_favorites_repeats WHERE video_id = %s;", (video_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row:
+            return {"totalCount": row[0], "requestCount": row[1], "likeCount": row[2]}
+        return {"totalCount": 0, "requestCount": 0, "likeCount": 0}
+    except Exception as e:
+        if conn:
+            conn.close()
+        return {"totalCount": 0, "requestCount": 0, "likeCount": 0}
 
 @app.get("/history")
 def get_history_list(limit: int = 20):
