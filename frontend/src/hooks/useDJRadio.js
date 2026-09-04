@@ -214,7 +214,7 @@ export default function useDJRadio() {
     preloadAbortControllerRef.current = controller;
 
     try {
-      console.log('DJ Radio: Faltan <= 30s. Precargando siguiente tema...');
+      console.log('DJ Radio: Faltan <= 50s. Precargando siguiente tema con anticipación...');
       const res = await fetch('http://127.0.0.1:3001/api/preload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -985,11 +985,12 @@ export default function useDJRadio() {
           const duration = playerRef.current.getDuration();
           const current = playerRef.current.getCurrentTime();
           const remaining = duration - current;
+          // Precarga anticipada: 50 segundos antes (o al 40% si la canción dura menos de 65s)
+          const preloadThreshold = duration > 65 ? 50 : Math.max(15, Math.floor(duration * 0.4));
 
-          // Cuando falten 30 segundos o menos para terminar la canción
           if (
-            duration > 35 &&
-            remaining <= 30 &&
+            duration > 20 &&
+            remaining <= preloadThreshold &&
             currentSongRef.current?.videoId &&
             preloadTriggeredRef.current !== currentSongRef.current.videoId &&
             !isPreloadingRef.current &&

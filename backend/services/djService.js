@@ -4,10 +4,10 @@ const { OPENROUTER_API_KEY, DJ_SYSTEM_PROMPT } = require('../config/constants');
 async function getDJDecision(prompt, customSystemPrompt = null) {
   if (!OPENROUTER_API_KEY) return null;
   const models = [
-    "nvidia/nemotron-3.5-lightning:free",
+    "inclusionai/ling-3.0-flash-fin:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
     "minimax/minimax-m2.7:free",
-    "liquid/lfm-2.5-2.6b:free",
-    "openrouter/auto"
+    "liquid/lfm-2.5-2.6b:free"
   ];
 
   for (const model of models) {
@@ -24,7 +24,7 @@ async function getDJDecision(prompt, customSystemPrompt = null) {
           "Authorization": `Bearer ${OPENROUTER_API_KEY}`, 
           "Content-Type": "application/json" 
         },
-        timeout: 10000
+        timeout: 4500
       });
 
       if (response.data?.choices?.[0]?.message?.content) {
