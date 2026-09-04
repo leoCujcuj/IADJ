@@ -146,6 +146,7 @@ export default function useDJRadio() {
   const preloadedAudioRef = useRef(null);
   const removedVideoIdsRef = useRef(new Set());
   const executeTransitionRef = useRef(null);
+  const hasRetriedFallbackRef = useRef(false);
 
   const chatEndRef = useRef(null);   
   const audioPlayerRef = useRef(new Audio());
@@ -926,6 +927,37 @@ export default function useDJRadio() {
               if (e.data === 0 && executeTransitionRef.current) {
                 executeTransitionRef.current();
               }
+            },
+            onError: async (e) => {
+              const errorCode = e.data;
+              console.warn(`[YouTube Player Error]: Código ${errorCode} en video "${currentSongRef.current?.title}" (${currentSongRef.current?.videoId})`);
+              
+              // Si el video tiene restricción de inserción (101/150) o error de reproducción (2, 5, 100):
+              if (currentSongRef.current?.videoId && !hasRetriedFallbackRef.current) {
+                hasRetriedFallbackRef.current = true;
+                try {
+                  console.log(`[YouTube Fallback]: Buscando versión reproducible para "${currentSongRef.current.title}"...`);
+                  const res = await fetch(`http://127.0.0.1:3001/api/video/fallback?title=${encodeURIComponent(currentSongRef.current.title)}&artist=${encodeURIComponent(currentSongRef.current.artist || '')}&exclude_id=${currentSongRef.current.videoId}`);
+                  const data = await res.json();
+                  if (data.videoId && data.videoId !== currentSongRef.current.videoId) {
+                    console.log(`[YouTube Fallback]: Cambiando a versión reproducible: ${data.videoId} (${data.title})`);
+                    if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
+                      playerRef.current.loadVideoById(data.videoId);
+                    }
+                    setCurrentSong(prev => prev ? { ...prev, videoId: data.videoId, title: data.title || prev.title } : null);
+                    return;
+                  }
+                } catch (err) {
+                  console.error("[YouTube Fallback Error]:", err);
+                }
+              }
+
+              // Si falló el fallback o no hubo alternativa, saltar de inmediato a la siguiente canción
+              console.warn("[YouTube Error]: No se pudo reproducir este video. Saltando a la siguiente canción...");
+              hasRetriedFallbackRef.current = false;
+              if (executeTransitionRef.current) {
+                executeTransitionRef.current();
+              }
             }
           }
         });
@@ -951,6 +983,7 @@ export default function useDJRadio() {
   useEffect(() => {
     if (!currentSong?.videoId) return;
     currentSongRef.current = currentSong;
+    hasRetriedFallbackRef.current = false;
     setIsLiked(false);
     setIsDisliked(false);
     preloadTriggeredRef.current = null;

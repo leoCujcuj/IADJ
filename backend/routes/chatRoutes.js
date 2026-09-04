@@ -15,12 +15,16 @@ const {
   handleLoadSession,
   handleCreateSession,
   handleRenameSession,
-  handleDeleteSession
+  handleDeleteSession,
+  handleFallbackVideo
 } = require('../controllers/chatController');
 
 router.post('/chat', handleChat);
 router.post('/preload', handlePreload);
 router.post('/session/transition', handleSessionTransition);
+
+// Ruta para fallback de videos con restricción de iframe en YouTube
+router.get('/video/fallback', handleFallbackVideo);
 
 // Rutas de persistencia de sesiones
 router.get('/session/current', handleGetCurrentSession);

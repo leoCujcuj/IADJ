@@ -198,7 +198,8 @@ Sonando ahora: ${currentSong ? `${currentSong.title} - ${currentSong.artist}` : 
 Historial reciente: ${historyContext}.
 REGLAS OBLIGATORIAS:
 1. TIEMPO EXACTO: Si saludas o haces referencia al momento del día, básate ESTRICTAMENTE en "${timeContext}". Si el periodo es Tarde o Mediodía, JAMÁS digas 'en esta noche' ni 'buenas noches'.
-2. Sé musicalmente coherente. Si el usuario menciona múltiples artistas o un estilo, elige una canción representativa del mismo género. Tu locución debe nombrar ÚNICAMENTE al artista que pongas en "busqueda".`;
+2. Sé musicalmente coherente. Si el usuario menciona múltiples artistas o un estilo, elige una canción representativa del mismo género. Tu locución debe nombrar ÚNICAMENTE al artista que pongas en "busqueda".
+3. PETICIÓN DIRECTA: Si el usuario pide poner una canción (ej: "pon...", "reproduce...", "toca..."), pon SIEMPRE cambiar_cancion: true y busca la canción solicitada. JAMÁS digas 'ya la tienes puesta' ni rechaces ponerla, aunque sea la misma que suena ahora (el usuario puede estar pidiendo reiniciarla o desatascarla).`;
 
     let djDecision = await getDJDecision(prompt);
     
@@ -214,8 +215,15 @@ REGLAS OBLIGATORIAS:
     // Salvaguarda: Si el usuario dio dislike o pidió música explícitamente, SIEMPRE debe cambiar de canción
     if (!isQuestionOrTrivia && /\b(?:dislike|no\s+me\s+gusta|cambia|pon|ponme|reproduce|salta|otra|siguiente)\b/i.test(message)) {
       shouldChangeSong = true;
-      if (!djDecision.busqueda || djDecision.busqueda.trim() === '') {
-        djDecision.busqueda = djDecision.artista || djDecision.cancion || (searchType === 'artist' ? 'Frank Ocean' : 'canciones recomendadas');
+      if (!djDecision.busqueda || djDecision.busqueda.trim() === '' || /ya\s+la\s+tienes/i.test(djComment)) {
+        const cleanedUserSearch = message
+          .replace(/^(?:pon(?:me)?|reproduce|toca|cambia\s+a|quiero\s+escuchar|quiero\s+o[ií]r)\s+/i, '')
+          .replace(/[.?!,]/g, '')
+          .trim();
+        djDecision.busqueda = cleanedUserSearch || djDecision.artista || djDecision.cancion || (searchType === 'artist' ? 'Frank Ocean' : 'canciones recomendadas');
+        if (/ya\s+la\s+tienes/i.test(djComment)) {
+          djComment = `¡Marchando de nuevo "${djDecision.busqueda}" para ti!`;
+        }
       }
     }
 
@@ -743,6 +751,20 @@ async function handleDeleteSession(req, res) {
   }
 }
 
+async function handleFallbackVideo(req, res) {
+  try {
+    const { title, artist, exclude_id } = req.query;
+    const response = await axios.get(`${PYTHON_SERVICE_URL}/fallback-video`, {
+      params: { title, artist, exclude_id },
+      timeout: 5000
+    });
+    return res.json(response.data);
+  } catch (error) {
+    console.error("Error en fallback video:", error.message);
+    return res.status(500).json({ error: error.message });
+  }
+}
+
 module.exports = {
   handleChat,
   handlePreload,
@@ -758,5 +780,6 @@ module.exports = {
   handleLoadSession,
   handleCreateSession,
   handleRenameSession,
-  handleDeleteSession
+  handleDeleteSession,
+  handleFallbackVideo
 };

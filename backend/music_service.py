@@ -512,6 +512,35 @@ def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
         return {"error": "No results"}
     except Exception as e: return {"error": str(e)}
 
+@app.get("/fallback-video")
+def get_fallback_video(title: str = Query(...), artist: str = Query(""), exclude_id: str = Query("")):
+    try:
+        yt = get_yt()
+        query = f"{artist} {title}".strip()
+        # 1. Buscar en videos (los videos oficiales y lyric videos casi siempre permiten inserción en iframe)
+        results = yt.search(query, filter="videos")
+        for r in results:
+            vid = r.get('videoId')
+            if vid and vid != exclude_id:
+                return {
+                    "videoId": vid,
+                    "title": r.get('title', title),
+                    "artist": artist
+                }
+        # 2. Fallback general sin filtro
+        results_all = yt.search(query)
+        for r in results_all:
+            vid = r.get('videoId')
+            if vid and vid != exclude_id:
+                return {
+                    "videoId": vid,
+                    "title": r.get('title', title),
+                    "artist": artist
+                }
+        return {"error": "No alternative video found"}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.post("/queue/remove/{video_id}")
 def remove_from_queue(video_id: str):
     global current_queue
