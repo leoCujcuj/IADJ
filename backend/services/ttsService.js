@@ -53,7 +53,12 @@ async function generateTTS(text) {
     return `/audio/${fileName}`;
   } catch (error) {
     if (error.response) {
-      console.error(`Error ElevenLabs (${error.response.status}):`, error.response.data.toString());
+      const errStr = error.response.data ? error.response.data.toString() : '';
+      if (errStr.includes("quota_exceeded")) {
+        console.warn("[ElevenLabs]: Cuota mensual de caracteres agotada en tu cuenta. Usando voz del navegador.");
+      } else {
+        console.error(`Error ElevenLabs (${error.response.status}):`, errStr);
+      }
     } else {
       console.error("Error de red con ElevenLabs:", error.message);
     }

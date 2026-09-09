@@ -345,7 +345,7 @@ export default function useDJRadio() {
       preloadedDataRef.current = null;
       preloadTriggeredRef.current = null;
 
-      // Salvaguarda: si la canción precargada fue eliminada por el usuario con X, NUNCA reproducirla
+      // Salvaguarda 1: si la canción precargada fue eliminada por el usuario con X, NUNCA reproducirla
       if (removedVideoIdsRef.current.has(nextSong.videoId)) {
         console.warn(`DJ Radio: La canción precargada "${nextSong.title}" (${nextSong.videoId}) fue eliminada con X. Descartando y solicitando siguiente válida.`);
         if (preloadedAudioRef.current) {
@@ -359,13 +359,24 @@ export default function useDJRadio() {
         return;
       }
 
+      // Salvaguarda 2: si la canción precargada es idéntica a la actual (mismo videoId o título), descartar y avanzar
+      const cleanTitle = (t) => (t || '').replace(/[\(\[].*?[\)\]]/g, '').replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const curT = cleanTitle(currentSongRef.current?.title);
+      const nextT = cleanTitle(nextSong.title);
+      if (currentSongRef.current && (nextSong.videoId === currentSongRef.current.videoId || (curT && nextT && curT === nextT))) {
+        console.warn(`DJ Radio: La canción precargada "${nextSong.title}" es idéntica a la actual. Saltando para evitar repetición.`);
+        fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' }).catch(() => {});
+        handleSendMessage(null, "Siguiente canción DJ.");
+        return;
+      }
+
       fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' }).catch(() => {});
       fetch('http://127.0.0.1:3001/api/session/transition', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           song: nextSong,
-          spoke: !!audioUrl,
+          spoke: !!audioUrl || !!dj_comment,
           frequency: frequencyRef.current
         })
       }).catch(() => {});

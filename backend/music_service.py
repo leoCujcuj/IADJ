@@ -107,37 +107,83 @@ def get_song_radio(yt, video_id, limit=25):
         print(f"DEBUG: Error en get_song_radio para {video_id}: {str(e)}")
     return []
 
+def normalize_song_title(title: str, artist: str = "") -> str:
+    if not title:
+        return ""
+    # Quitar paréntesis, corchetes y todo su contenido: (Official Video), [Audio], etc.
+    t = re.sub(r'[\(\[].*?[\)\]]', '', title)
+    # Quitar menciones de feat/ft fuera de paréntesis
+    t = re.sub(r'\b(?:feat|ft)\.?\s+.*$', '', t, flags=re.IGNORECASE)
+    # Si se conoce el artista, remover su nombre del título si está incluido
+    if artist:
+        t = re.sub(re.escape(artist), '', t, flags=re.IGNORECASE)
+    # Limpiar guiones y espacios residuales
+    t = re.sub(r'^[ \t\-_]+|[ \t\-_]+$', '', t)
+    t = re.sub(r'[^\w\s]', '', t)
+    return re.sub(r'\s+', ' ', t).strip().lower()
+
 def set_queue(tracks, source_name, clear=True, filter_history=True, append=False):
-    global current_queue, current_source, currently_playing_id, played_history
+    global current_queue, current_source, currently_playing_id, currently_playing_title, played_history
     if clear: current_queue = []
     new_entries = []
-    existing_ids = {s['videoId'] for s in current_queue}
+    existing_ids = {s['videoId'] for s in current_queue if s.get('videoId')}
     if currently_playing_id: existing_ids.add(currently_playing_id)
+    
+    existing_titles = {normalize_song_title(s.get('title'), s.get('artist', '')) for s in current_queue if s.get('title')}
+    if currently_playing_title:
+        existing_titles.add(normalize_song_title(currently_playing_title))
     
     # Excluir canciones ya reproducidas en la sesión para evitar repeticiones
     history_ids = set()
+    history_titles = set()
     if filter_history and played_history:
         history_ids = {p['videoId'] for p in played_history if p.get('videoId')}
+        history_titles = {normalize_song_title(p.get('title'), p.get('artist', '')) for p in played_history if p.get('title')}
     
     for t in tracks:
         v_id = t.get('videoId')
-        if v_id and v_id not in existing_ids and v_id not in history_ids:
-            artist = t.get('artist') or (t['artists'][0]['name'] if t.get('artists') else "Unknown")
-            if artist.lower() not in [a.lower() for a in disliked_artists]:
-                new_entries.append({"videoId": v_id, "title": t.get('title', 'Unknown'), "artist": artist})
-                existing_ids.add(v_id)
+        if not v_id:
+            continue
+        artist = t.get('artist') or (t['artists'][0]['name'] if t.get('artists') else "Unknown")
+        title = t.get('title', 'Unknown')
+        norm_t = normalize_song_title(title, artist)
 
-    # Salvaguarda: si todas las sugerencias de la radio ya se escucharon (sesión muy larga),
+        if v_id in existing_ids or (norm_t and norm_t in existing_titles):
+            continue
+        if v_id in history_ids or (norm_t and norm_t in history_titles):
+            continue
+        if artist.lower() in [a.lower() for a in disliked_artists]:
+            continue
+
+        new_entries.append({"videoId": v_id, "title": title, "artist": artist})
+        existing_ids.add(v_id)
+        if norm_t:
+            existing_titles.add(norm_t)
+
+    # Salvaguarda: si todas las sugerencias ya se escucharon (sesión muy larga),
     # permitir temas que no estén en las últimas 15 canciones escuchadas
-    if not new_entries and tracks and history_ids:
+    if not new_entries and tracks and (history_ids or history_titles):
         recent_ids = {p['videoId'] for p in played_history[:15] if p.get('videoId')}
+        recent_titles = {normalize_song_title(p.get('title'), p.get('artist', '')) for p in played_history[:15] if p.get('title')}
         for t in tracks:
             v_id = t.get('videoId')
-            if v_id and v_id not in existing_ids and v_id not in recent_ids:
-                artist = t.get('artist') or (t['artists'][0]['name'] if t.get('artists') else "Unknown")
-                if artist.lower() not in [a.lower() for a in disliked_artists]:
-                    new_entries.append({"videoId": v_id, "title": t.get('title', 'Unknown'), "artist": artist})
-                    existing_ids.add(v_id)
+            if not v_id:
+                continue
+            artist = t.get('artist') or (t['artists'][0]['name'] if t.get('artists') else "Unknown")
+            title = t.get('title', 'Unknown')
+            norm_t = normalize_song_title(title, artist)
+
+            if v_id in existing_ids or (norm_t and norm_t in existing_titles):
+                continue
+            if v_id in recent_ids or (norm_t and norm_t in recent_titles):
+                continue
+            if artist.lower() in [a.lower() for a in disliked_artists]:
+                continue
+
+            new_entries.append({"videoId": v_id, "title": title, "artist": artist})
+            existing_ids.add(v_id)
+            if norm_t:
+                existing_titles.add(norm_t)
     
     if clear:
         current_queue = new_entries
@@ -193,13 +239,20 @@ def get_artist_discography_tracks(yt, artist_query):
                     tracks.append(s)
 
     clean_tracks = []
+    seen_track_titles = set()
     for t in tracks:
         v_id = t.get('videoId')
         if v_id:
             artist = t.get('artist') or (t['artists'][0]['name'] if t.get('artists') else artist_name)
+            title = t.get('title', 'Unknown')
+            norm_t = normalize_song_title(title, artist)
+            if norm_t and norm_t in seen_track_titles:
+                continue
+            if norm_t:
+                seen_track_titles.add(norm_t)
             clean_tracks.append({
                 "videoId": v_id,
-                "title": t.get('title', 'Unknown'),
+                "title": title,
                 "artist": artist
             })
 
@@ -314,11 +367,40 @@ def ensure_queue_populated(yt, threshold=10, blocking=False):
         t.daemon = True
         t.start()
 
+def purge_queue_duplicates():
+    """Elimina del frente de la cola cualquier tema idéntico al que está sonando o al último del historial"""
+    global current_queue, currently_playing_id, currently_playing_title, played_history
+    curr_norm = normalize_song_title(currently_playing_title)
+    last_hist_id = played_history[0].get('videoId') if played_history else None
+    last_hist_norm = normalize_song_title(played_history[0].get('title'), played_history[0].get('artist', '')) if played_history else ""
+
+    while current_queue:
+        top = current_queue[0]
+        top_id = top.get('videoId')
+        top_norm = normalize_song_title(top.get('title'), top.get('artist', ''))
+        is_repeat = False
+        if currently_playing_id and top_id == currently_playing_id:
+            is_repeat = True
+        elif curr_norm and top_norm and curr_norm == top_norm:
+            is_repeat = True
+        elif last_hist_id and top_id == last_hist_id:
+            is_repeat = True
+        elif last_hist_norm and top_norm and last_hist_norm == top_norm:
+            is_repeat = True
+
+        if is_repeat:
+            print(f"DEBUG: Purgando canción repetida del inicio de la cola: '{top.get('title')}' ({top_id})")
+            current_queue.pop(0)
+        else:
+            break
+
 @app.get("/queue/peek")
 def peek_queue():
     global current_queue
     yt = get_yt()
+    purge_queue_duplicates()
     ensure_queue_populated(yt, threshold=10, blocking=(len(current_queue) == 0))
+    purge_queue_duplicates()
     if current_queue:
         return {"nextSong": current_queue[0], "queueLength": len(current_queue)}
     return {"nextSong": None, "queueLength": 0}
@@ -327,7 +409,9 @@ def peek_queue():
 def pop_queue():
     global current_queue, played_history, currently_playing_id, currently_playing_title
     yt = get_yt()
+    purge_queue_duplicates()
     ensure_queue_populated(yt, threshold=10, blocking=(len(current_queue) == 0))
+    purge_queue_duplicates()
     if current_queue:
         song = current_queue.pop(0)
         currently_playing_id = song['videoId']
@@ -343,6 +427,7 @@ def refill_queue():
     global current_queue
     yt = get_yt()
     ensure_queue_populated(yt, threshold=10, blocking=True)
+    purge_queue_duplicates()
     return {"status": "ok", "queueLength": len(current_queue)}
 
 @app.get("/status")
@@ -409,20 +494,28 @@ def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
         if not clean_q or any(w in clean_q for w in ["siguiente", "next", "otra"]):
             # 1. Si ya hay canciones en la cola, tomar la siguiente
             if current_queue:
-                song = current_queue.pop(0)
-                played_history.insert(0, song); currently_playing_id = song['videoId'];
-                if len(current_queue) <= 10:
-                    ensure_queue_populated(yt, threshold=10, blocking=False)
-                return song
+                purge_queue_duplicates()
+                if current_queue:
+                    song = current_queue.pop(0)
+                    currently_playing_id = song['videoId']
+                    currently_playing_title = song['title']
+                    played_history.insert(0, song)
+                    if len(current_queue) <= 10:
+                        ensure_queue_populated(yt, threshold=10, blocking=False)
+                    return song
             
             # 2. Si la cola está vacía pero estamos en MODO ARTISTA: recargar MÁS del mismo artista
             if current_mode == "artist" and current_mode_param:
                 _, more_tracks = get_artist_discography_tracks(yt, current_mode_param)
                 if more_tracks:
                     set_queue(more_tracks, f"Solo {current_mode_param}", clear=True, filter_history=True)
+                    purge_queue_duplicates()
                     if current_queue:
                         song = current_queue.pop(0)
-                        played_history.insert(0, song); currently_playing_id = song['videoId']; return song
+                        currently_playing_id = song['videoId']
+                        currently_playing_title = song['title']
+                        played_history.insert(0, song)
+                        return song
 
             # 3. Si no es modo artista, radio de YouTube Music
             source_id = currently_playing_id or (played_history[0]['videoId'] if played_history else None)
@@ -430,15 +523,23 @@ def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
                 radio_tracks = get_song_radio(yt, source_id, limit=25)
                 if radio_tracks:
                     set_queue(radio_tracks, "Mix Automático")
+                    purge_queue_duplicates()
                     if current_queue:
                         song = current_queue.pop(0)
-                        played_history.insert(0, song); currently_playing_id = song['videoId']; return song
+                        currently_playing_id = song['videoId']
+                        currently_playing_title = song['title']
+                        played_history.insert(0, song)
+                        return song
             
             # 4. Si la sesión es completamente NUEVA (recién entra el usuario y presiona siguiente):
             if get_personal_mix():
+                purge_queue_duplicates()
                 if current_queue:
                     song = current_queue.pop(0)
-                    played_history.insert(0, song); currently_playing_id = song['videoId']; return song
+                    currently_playing_id = song['videoId']
+                    currently_playing_title = song['title']
+                    played_history.insert(0, song)
+                    return song
             
             # 5. Fallback chill inicial
             initial_results = yt.search("Daniel Caesar Mac Miller Frank Ocean", filter="songs")

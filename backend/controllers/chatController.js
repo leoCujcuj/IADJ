@@ -77,6 +77,21 @@ function isTriviaOrConversation(text) {
   return false;
 }
 
+function isSameSong(songA, songB) {
+  if (!songA || !songB) return false;
+  if (songA.videoId && songB.videoId && songA.videoId === songB.videoId) return true;
+  const clean = (str) => (str || '')
+    .replace(/[\(\[].*?[\)\]]/g, '')
+    .replace(/\b(?:feat|ft)\.?\s+.*$/i, '')
+    .replace(/[^\w\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  const titleA = clean(songA.title);
+  const titleB = clean(songB.title);
+  return !!(titleA && titleB && titleA === titleB);
+}
+
 function isPureNextRequest(text) {
   if (!text) return false;
   const t = text.trim().toLowerCase();
@@ -143,6 +158,13 @@ async function handleChat(req, res) {
           params: { q: 'siguiente', type: 'song' } 
         });
         nextSong = searchRes.data;
+        if (currentSong && isSameSong(nextSong, currentSong)) {
+          console.warn(`[CHAT NEXT]: Siguiente tema "${nextSong?.title}" es idéntico al actual. Saltando al siguiente...`);
+          const retryRes = await axios.get(`${PYTHON_SERVICE_URL}/search`, { 
+            params: { q: 'siguiente', type: 'song' } 
+          });
+          nextSong = retryRes.data;
+        }
       } catch (err) {
         console.error("Error obteniendo siguiente canción de Python:", err.message);
       }
@@ -293,10 +315,21 @@ async function handlePreload(req, res) {
 
   try {
     const peekRes = await axios.get(`${PYTHON_SERVICE_URL}/queue/peek`);
-    const candidate = peekRes.data?.nextSong;
+    let candidate = peekRes.data?.nextSong;
 
     if (!candidate || !candidate.videoId) {
       return res.json({ nextSong: null });
+    }
+
+    // Salvaguarda: si candidate es idéntica a la canción actual, purgarla y obtener la siguiente
+    if (isSameSong(candidate, currentSong)) {
+      console.warn(`[PRELOAD]: Candidate "${candidate.title}" es idéntica a la actual "${currentSong?.title}". Purgando duplicado...`);
+      await axios.post(`${PYTHON_SERVICE_URL}/queue/pop`).catch(() => {});
+      const retryPeek = await axios.get(`${PYTHON_SERVICE_URL}/queue/peek`);
+      candidate = retryPeek.data?.nextSong;
+      if (!candidate || !candidate.videoId || isSameSong(candidate, currentSong)) {
+        return res.json({ nextSong: null });
+      }
     }
 
     // Predecir si la siguiente canción alcanzará la cuota de sesión para hablar
