@@ -33,6 +33,8 @@ services:
     depends_on:
       - db
     volumes:
+      - ./backend/music_service.py:/app/music_service.py
+      - ./backend/init_db.py:/app/init_db.py
       - ./backend/headers.json:/app/headers.json
     restart: always
 

@@ -2,6 +2,7 @@ import os
 import random
 import json
 import re
+import threading
 from datetime import datetime
 from fastapi import FastAPI, Query
 from ytmusicapi import YTMusic, parsers
@@ -31,6 +32,8 @@ currently_playing_id = None
 currently_playing_title = ""
 current_mode = "song"
 current_mode_param = ""
+is_refilling = False
+refill_lock = threading.Lock()
 
 def get_yt():
     global yt_client, auth_status
@@ -104,7 +107,7 @@ def get_song_radio(yt, video_id, limit=25):
         print(f"DEBUG: Error en get_song_radio para {video_id}: {str(e)}")
     return []
 
-def set_queue(tracks, source_name, clear=True, filter_history=True):
+def set_queue(tracks, source_name, clear=True, filter_history=True, append=False):
     global current_queue, current_source, currently_playing_id, played_history
     if clear: current_queue = []
     new_entries = []
@@ -136,8 +139,17 @@ def set_queue(tracks, source_name, clear=True, filter_history=True):
                     new_entries.append({"videoId": v_id, "title": t.get('title', 'Unknown'), "artist": artist})
                     existing_ids.add(v_id)
     
-    if clear: current_queue = new_entries; current_source = source_name
-    else: current_queue = new_entries + current_queue
+    if clear:
+        current_queue = new_entries
+        current_source = source_name
+    elif append:
+        current_queue = current_queue + new_entries
+        if not current_source:
+            current_source = source_name
+    else:
+        current_queue = new_entries + current_queue
+        if not current_source:
+            current_source = source_name
     current_queue = current_queue[:100]
 
 def get_artist_discography_tracks(yt, artist_query):
@@ -193,35 +205,120 @@ def get_artist_discography_tracks(yt, artist_query):
 
     return artist_name, clean_tracks
 
-def ensure_queue_populated(yt):
-    global current_queue, currently_playing_id, played_history, current_mode, current_mode_param
-    if current_queue:
-        return
-    # Si estamos en Modo Artista, mantener al artista sin saltar a otros músicos:
-    if current_mode == "artist" and current_mode_param:
-        _, more_tracks = get_artist_discography_tracks(yt, current_mode_param)
-        if more_tracks:
-            set_queue(more_tracks, f"Solo {current_mode_param}", clear=True, filter_history=True)
+def get_personal_mix(clear=True, append=False):
+    global current_queue, current_source, currently_playing_id, played_history
+    yt = get_yt()
+    print(f"DEBUG: Intentando obtener Mix Personal. Status: {auth_status}")
+    if auth_status == "logeado":
+        try:
+            # 1. Intentar obtener la playlist oficial de "Tus me gusta" (ID constante 'LM')
+            print("DEBUG: Cargando playlist 'LM' (Liked Songs)...")
+            liked_data = yt.get_playlist('LM', limit=100)
+            tracks = liked_data.get("tracks", [])
+            
+            if not tracks:
+                # 2. Si falla LM, intentar buscar "Mi Supermix"
+                print("DEBUG: LM vacía, buscando 'Mi Supermix'...")
+                search_results = yt.search("Mi Supermix", filter="playlists")
+                if search_results:
+                    liked_data = yt.get_playlist(search_results[0]['playlistId'], limit=50)
+                    tracks = liked_data.get("tracks", [])
+
+            if tracks:
+                random.shuffle(tracks)
+                set_queue(tracks, "Tus Favoritos Reales", clear=clear, append=append)
+                print(f"DEBUG: Mix cargado con {len(tracks)} canciones.")
+                return True
+            else:
+                print("DEBUG: No se encontraron canciones en los favoritos.")
+        except Exception as e:
+            print(f"DEBUG: Error en get_personal_mix: {str(e)}")
+    return False
+
+def _perform_refill(yt, threshold=10):
+    global current_queue, currently_playing_id, currently_playing_title, played_history, current_mode, current_mode_param, is_refilling, current_source
+    with refill_lock:
+        if len(current_queue) > threshold:
             return
-    source_id = currently_playing_id or (played_history[0]['videoId'] if played_history else None)
-    if source_id:
-        radio = get_song_radio(yt, source_id, limit=25)
-        if radio:
-            set_queue(radio, "Mix Automático")
-            return
-    # Sesión inicial nueva: Cargar favoritos/personal mix
-    if get_personal_mix() and current_queue:
+        is_refilling = True
+        try:
+            print(f"DEBUG: [AUTO-REFILL] Buscando más canciones. En cola: {len(current_queue)}, umbral: {threshold}")
+            # 1. Modo Artista: mantener canciones exclusivas del artista
+            if current_mode == "artist" and current_mode_param:
+                _, more_tracks = get_artist_discography_tracks(yt, current_mode_param)
+                if more_tracks:
+                    set_queue(more_tracks, f"Solo {current_mode_param}", clear=False, filter_history=True, append=True)
+                    if len(current_queue) > threshold:
+                        print(f"DEBUG: [AUTO-REFILL] Modo Artista completado con {len(current_queue)} canciones.")
+                        return
+
+            # 2. Radio de YouTube Music basada en la última canción de la cola, o la actual, o el historial
+            source_id = None
+            if current_queue:
+                source_id = current_queue[-1].get('videoId')
+            if not source_id and currently_playing_id:
+                source_id = currently_playing_id
+            if not source_id and played_history:
+                source_id = played_history[0].get('videoId')
+
+            if source_id:
+                radio = get_song_radio(yt, source_id, limit=25)
+                if radio:
+                    set_queue(radio, current_source or "Mix Automático", clear=False, filter_history=True, append=True)
+                    if len(current_queue) > threshold:
+                        print(f"DEBUG: [AUTO-REFILL] Radio ({source_id}) completada con {len(current_queue)} canciones.")
+                        return
+
+            # 3. Favoritos / Personal mix
+            if auth_status == "logeado":
+                if get_personal_mix(clear=False, append=True):
+                    if len(current_queue) > threshold:
+                        print(f"DEBUG: [AUTO-REFILL] Personal mix completado con {len(current_queue)} canciones.")
+                        return
+
+            # 4. Fallback por búsqueda contextual
+            query = ""
+            if current_queue:
+                query = f"{current_queue[-1].get('artist', '')} {current_queue[-1].get('title', '')}".strip()
+            if not query and played_history:
+                query = f"{played_history[0].get('artist', '')} {played_history[0].get('title', '')}".strip()
+            if not query:
+                query = currently_playing_title or "Daniel Caesar Mac Miller Frank Ocean"
+
+            fallback_tracks = yt.search(query, filter="songs")
+            if fallback_tracks:
+                clean_s = []
+                for s in fallback_tracks:
+                    v_id = s.get('videoId')
+                    if v_id:
+                        artist = s.get('artist') or (s['artists'][0]['name'] if s.get('artists') else "Unknown")
+                        clean_s.append({"videoId": v_id, "title": s.get('title', 'Unknown'), "artist": artist})
+                set_queue(clean_s, current_source or "Recomendaciones", clear=False, filter_history=True, append=True)
+                print(f"DEBUG: [AUTO-REFILL] Búsqueda fallback completada con {len(current_queue)} canciones.")
+        except Exception as e:
+            print(f"DEBUG: Error en _perform_refill: {str(e)}")
+        finally:
+            is_refilling = False
+
+def ensure_queue_populated(yt, threshold=10, blocking=False):
+    global current_queue, is_refilling
+    if len(current_queue) > threshold:
         return
-    # Fallback inicial a música chill
-    init_tracks = yt.search("Daniel Caesar Mac Miller Frank Ocean", filter="songs")
-    if init_tracks:
-        set_queue(init_tracks, "Sesión Inicial")
+    # Si la cola está completamente vacía (len == 0), debemos bloquear para que peek/pop obtenga un tema de inmediato
+    if len(current_queue) == 0 or blocking:
+        _perform_refill(yt, threshold)
+    else:
+        if is_refilling:
+            return
+        t = threading.Thread(target=_perform_refill, args=(yt, threshold))
+        t.daemon = True
+        t.start()
 
 @app.get("/queue/peek")
 def peek_queue():
     global current_queue
     yt = get_yt()
-    ensure_queue_populated(yt)
+    ensure_queue_populated(yt, threshold=10, blocking=(len(current_queue) == 0))
     if current_queue:
         return {"nextSong": current_queue[0], "queueLength": len(current_queue)}
     return {"nextSong": None, "queueLength": 0}
@@ -230,19 +327,30 @@ def peek_queue():
 def pop_queue():
     global current_queue, played_history, currently_playing_id, currently_playing_title
     yt = get_yt()
-    ensure_queue_populated(yt)
+    ensure_queue_populated(yt, threshold=10, blocking=(len(current_queue) == 0))
     if current_queue:
         song = current_queue.pop(0)
         currently_playing_id = song['videoId']
         currently_playing_title = song['title']
         played_history.insert(0, song)
+        if len(current_queue) <= 10:
+            ensure_queue_populated(yt, threshold=10, blocking=False)
         return song
     return {"error": "No hay canciones en la cola"}
+
+@app.post("/queue/refill")
+def refill_queue():
+    global current_queue
+    yt = get_yt()
+    ensure_queue_populated(yt, threshold=10, blocking=True)
+    return {"status": "ok", "queueLength": len(current_queue)}
 
 @app.get("/status")
 def status():
     global current_mode, current_mode_param
-    get_yt()
+    yt = get_yt()
+    if len(current_queue) <= 10 and (currently_playing_id or played_history):
+        ensure_queue_populated(yt, threshold=10, blocking=False)
     return {
         "status": auth_status,
         "queue": current_queue,
@@ -288,36 +396,6 @@ def add_to_queue(q: str = Query(...)):
         return {"error": "Link no reconocido"}
     except Exception as e: return {"error": str(e)}
 
-def get_personal_mix():
-    global current_queue, current_source, currently_playing_id, played_history
-    yt = get_yt()
-    print(f"DEBUG: Intentando obtener Mix Personal. Status: {auth_status}")
-    if auth_status == "logeado":
-        try:
-            # 1. Intentar obtener la playlist oficial de "Tus me gusta" (ID constante 'LM')
-            print("DEBUG: Cargando playlist 'LM' (Liked Songs)...")
-            liked_data = yt.get_playlist('LM', limit=100)
-            tracks = liked_data.get("tracks", [])
-            
-            if not tracks:
-                # 2. Si falla LM, intentar buscar "Mi Supermix"
-                print("DEBUG: LM vacía, buscando 'Mi Supermix'...")
-                search_results = yt.search("Mi Supermix", filter="playlists")
-                if search_results:
-                    liked_data = yt.get_playlist(search_results[0]['playlistId'], limit=50)
-                    tracks = liked_data.get("tracks", [])
-
-            if tracks:
-                random.shuffle(tracks)
-                set_queue(tracks, "Tus Favoritos Reales")
-                print(f"DEBUG: Mix cargado con {len(tracks)} canciones.")
-                return True
-            else:
-                print("DEBUG: No se encontraron canciones en los favoritos.")
-        except Exception as e:
-            print(f"DEBUG: Error en get_personal_mix: {str(e)}")
-    return False
-
 @app.get("/search")
 def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
     global current_queue, current_source, played_history, currently_playing_id, currently_playing_title, disliked_artists, current_mode, current_mode_param
@@ -332,7 +410,10 @@ def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
             # 1. Si ya hay canciones en la cola, tomar la siguiente
             if current_queue:
                 song = current_queue.pop(0)
-                played_history.insert(0, song); currently_playing_id = song['videoId']; return song
+                played_history.insert(0, song); currently_playing_id = song['videoId'];
+                if len(current_queue) <= 10:
+                    ensure_queue_populated(yt, threshold=10, blocking=False)
+                return song
             
             # 2. Si la cola está vacía pero estamos en MODO ARTISTA: recargar MÁS del mismo artista
             if current_mode == "artist" and current_mode_param:
@@ -545,6 +626,9 @@ def get_fallback_video(title: str = Query(...), artist: str = Query(""), exclude
 def remove_from_queue(video_id: str):
     global current_queue
     current_queue = [s for s in current_queue if s['videoId'] != video_id]
+    if len(current_queue) <= 10:
+        yt = get_yt()
+        ensure_queue_populated(yt, threshold=10, blocking=False)
     return {"status": "removed"}
 
 @app.post("/queue/move/{video_id}")
