@@ -15,7 +15,7 @@ El sistema está dividido en cuatro componentes principales orquestados con **Do
 3. **`python-service`** (Python + FastAPI): Servicio que interactúa con la API de YouTube Music (`ytmusicapi`) para buscar canciones, gestionar colas, reproducir e integrar me gustas.
    - Puerto: `8000`
 4. **`db`** (PostgreSQL): Base de datos para persistir tokens de sesión y configuraciones.
-   - Puerto: `5432`
+   - Puerto: `5433`
 
 ---
 
