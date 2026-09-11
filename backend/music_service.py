@@ -57,18 +57,62 @@ def get_yt():
     return yt_client
 
 def extract_youtube_ids(text):
-    """Extrae ID de video o de playlist"""
+    """Extrae ID de video o de playlist de cualquier enlace de YouTube o YouTube Music"""
     v_id = None
     p_id = None
     if not text: return v_id, p_id
     
+    # 1. Extraer ID de playlist si existe parámetro list=
+    p_match = re.search(r"list=([0-9A-Za-z_-]+)", text)
+    if p_match:
+        p_id = p_match.group(1)
+        
+    # 2. Extraer ID de video si existe
     v_match = re.search(r"(?:v=|\/|be\/|shorts\/)([0-9A-Za-z_-]{11})", text)
-    if v_match: v_id = v_match.group(1)
-    
-    p_match = re.search(r"list=([0-9A-Za-z_-]{15,})", text) # IDs de playlist suelen ser más largos
-    if p_match: p_id = p_match.group(1)
-    
+    if v_match:
+        v_id = v_match.group(1)
+        
     return v_id, p_id
+
+def fetch_playlist_tracks(yt, p_id, limit=50):
+    """Obtiene canciones de una playlist estándar o de radio mix (RD / RDAMVM)"""
+    tracks = []
+    title = "Playlist"
+    # Intentar obtener por endpoint directo de playlist
+    try:
+        data = yt.get_playlist(p_id, limit=limit)
+        raw_tracks = data.get("tracks", [])
+        title = data.get("title", "Playlist")
+        for t in raw_tracks:
+            vid = t.get("videoId")
+            if vid:
+                artist_name = t.get("artist") or (t.get("artists", [{}])[0].get("name") if t.get("artists") else "Unknown")
+                tracks.append({"videoId": vid, "title": t.get("title", "Unknown"), "artist": artist_name})
+        if tracks:
+            return title, tracks
+    except Exception as e:
+        print(f"DEBUG: get_playlist directo falló para {p_id}: {e}")
+
+    # Si falló (común en playlists generadas tipo RD o mezclas), usar watch next API
+    try:
+        res = yt._send_request('next', {'playlistId': p_id, 'isAudioOnly': True})
+        tabs = res.get('contents', {}).get('singleColumnMusicWatchNextResultsRenderer', {}).get('tabbedRenderer', {}).get('watchNextTabbedResultsRenderer', {}).get('tabs', [])
+        if tabs:
+            mq = tabs[0].get('tabRenderer', {}).get('content', {}).get('musicQueueRenderer', {})
+            ppr = mq.get('content', {}).get('playlistPanelRenderer', {})
+            contents = ppr.get('contents', [])
+            if contents:
+                parsed = parsers.watch.parse_watch_playlist(contents)
+                for t in parsed:
+                    vid = t.get('videoId')
+                    if vid:
+                        artist_name = t.get('artist') or (t.get('artists', [{}])[0].get('name') if t.get('artists') else 'Unknown')
+                        tracks.append({'videoId': vid, 'title': t.get('title', 'Unknown'), 'artist': artist_name})
+                title = ppr.get('title', 'Mix Playlist')
+    except Exception as e:
+        print(f"DEBUG: Fallback watch next para playlist {p_id} falló: {e}")
+
+    return title, tracks
 
 def get_accurate_metadata(yt, video_id):
     try:
@@ -198,21 +242,24 @@ def set_queue(tracks, source_name, clear=True, filter_history=True, append=False
             current_source = source_name
     current_queue = current_queue[:100]
 
-def get_artist_discography_tracks(yt, artist_query):
-    """Obtiene canciones exclusivas de un artista para el Modo Artista"""
-    clean = re.sub(r'^(?:pon(?:me)?|reproduce|toca|quiero\s+escuchar|escuchar|busca|búscame)\s+(?:a\s+|de\s+)?', '', artist_query, flags=re.IGNORECASE)
+def split_artist_names(query: str) -> List[str]:
+    """Separa una cadena en una lista de artistas según comas, ' y ', ' and ', '&' o ' con '"""
+    clean = re.sub(r'^(?:pon(?:me)?|reproduce|toca|quiero\s+escuchar|escuchar|busca|búscame)\s+(?:a\s+|de\s+)?', '', query, flags=re.IGNORECASE)
     clean = re.sub(r'^(?:a|de|el|la|los|las|solo)\s+', '', clean, flags=re.IGNORECASE)
     clean = re.sub(r'\b(?:album|álbum|cancion|canción|playlist|musica|música|discografia|discografía)\b', '', clean, flags=re.IGNORECASE).strip()
+    parts = re.split(r'\s*(?:,|\by\b|\band\b|&|\bcon\b)\s*', clean, flags=re.IGNORECASE)
+    return [p.strip() for p in parts if p.strip()]
 
-    artist_res = yt.search(clean or artist_query, filter="artists")
+def get_single_artist_tracks(yt, artist_query: str):
+    """Obtiene canciones exclusivas de un solo artista"""
+    artist_res = yt.search(artist_query, filter="artists")
     if not artist_res:
-        artist_res = yt.search(clean or artist_query)
-
+        artist_res = yt.search(artist_query)
     if not artist_res:
-        return None, []
+        return artist_query, []
 
     artist_id = artist_res[0].get('browseId')
-    artist_name = artist_res[0].get('artist') or artist_res[0].get('name') or clean
+    artist_name = artist_res[0].get('artist') or artist_res[0].get('name') or artist_query
 
     tracks = []
     if artist_id:
@@ -257,6 +304,40 @@ def get_artist_discography_tracks(yt, artist_query):
             })
 
     return artist_name, clean_tracks
+
+def get_artist_discography_tracks(yt, artist_query):
+    """Obtiene canciones exclusivas de uno o varios artistas entrelazándolas de forma equilibrada"""
+    artists = split_artist_names(artist_query)
+    if not artists:
+        return None, []
+    if len(artists) == 1:
+        return get_single_artist_tracks(yt, artists[0])
+
+    all_artist_names = []
+    per_artist_tracks = []
+    for art in artists:
+        a_name, a_tracks = get_single_artist_tracks(yt, art)
+        if a_tracks:
+            all_artist_names.append(a_name)
+            per_artist_tracks.append(a_tracks)
+
+    if not per_artist_tracks:
+        return None, []
+
+    combined_name = ", ".join(all_artist_names)
+    interleaved_tracks = []
+    max_len = max(len(lst) for lst in per_artist_tracks)
+    seen_ids = set()
+
+    for i in range(max_len):
+        for art_tracks in per_artist_tracks:
+            if i < len(art_tracks):
+                track = art_tracks[i]
+                if track['videoId'] not in seen_ids:
+                    seen_ids.add(track['videoId'])
+                    interleaved_tracks.append(track)
+
+    return combined_name, interleaved_tracks
 
 def get_personal_mix(clear=True, append=False):
     global current_queue, current_source, currently_playing_id, played_history
@@ -485,8 +566,7 @@ def add_to_queue(q: str = Query(...)):
         v_id, p_id = extract_youtube_ids(q)
         
         if p_id:
-            data = yt.get_playlist(p_id, limit=50)
-            tracks = data.get("tracks", [])
+            pl_title, tracks = fetch_playlist_tracks(yt, p_id, limit=50)
             if tracks:
                 new_items = []
                 for t in tracks:
@@ -494,18 +574,29 @@ def add_to_queue(q: str = Query(...)):
                         new_items.append({
                             "videoId": t['videoId'], 
                             "title": t.get('title', 'Unknown'), 
-                            "artist": t['artists'][0]['name'] if t.get('artists') else "YouTube"
+                            "artist": t.get('artist') or (t['artists'][0]['name'] if t.get('artists') else "YouTube")
                         })
                 current_queue.extend(new_items)
-                return {"status": "added_playlist", "count": len(new_items)}
+                return {"status": "added_playlist", "title": pl_title, "count": len(new_items)}
         
         if v_id:
             item = get_accurate_metadata(yt, v_id)
             if len(current_queue) >= 10: current_queue.insert(9, item)
             else: current_queue.append(item)
             return {"status": "added", "song": item}
+
+        # Si no es link, buscar por texto la canción y añadirla
+        clean_text = q.strip()
+        if clean_text:
+            res = yt.search(clean_text, filter="songs")
+            if res and res[0].get('videoId'):
+                s = res[0]
+                art = s.get('artist') or (s['artists'][0]['name'] if s.get('artists') else "Unknown")
+                item = {"videoId": s['videoId'], "title": s.get('title', clean_text), "artist": art}
+                current_queue.append(item)
+                return {"status": "added", "song": item}
             
-        return {"error": "Link no reconocido"}
+        return {"error": "No se pudo reconocer o encontrar la canción/link"}
     except Exception as e: return {"error": str(e)}
 
 @app.get("/search")
@@ -583,13 +674,12 @@ def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
 
         # PRIORIDAD 1: LINK DE PLAYLIST
         if p_id:
-            data = yt.get_playlist(p_id, limit=50)
-            tracks = data.get("tracks", [])
+            pl_title, tracks = fetch_playlist_tracks(yt, p_id, limit=50)
             if tracks:
                 current_mode = "playlist"
-                current_mode_param = data.get('title', 'Playlist')
-                set_queue(tracks[1:], f"Playlist: {data['title']}", filter_history=False)
-                res = {"videoId": tracks[0]['videoId'], "title": tracks[0]['title'], "artist": tracks[0]['artists'][0]['name'] if tracks[0].get('artists') else "Unknown"}
+                current_mode_param = pl_title
+                set_queue(tracks[1:], f"Playlist: {pl_title}", filter_history=False)
+                res = {"videoId": tracks[0]['videoId'], "title": tracks[0]['title'], "artist": tracks[0].get('artist') or (tracks[0]['artists'][0]['name'] if tracks[0].get('artists') else "Unknown")}
                 currently_playing_id = res['videoId']; played_history.insert(0, res); return res
 
         # PRIORIDAD 2: LINK DE VIDEO
@@ -768,6 +858,67 @@ def move_in_queue(video_id: str, to_index: int = Query(...)):
         current_queue.insert(to_index, song)
         return {"status": "moved"}
     return {"error": "No encontrada"}
+
+class BatchSongsPayload(BaseModel):
+    songs: List[str]
+    source_name: Optional[str] = "Lista de canciones"
+
+@app.post("/queue/batch-songs")
+def batch_songs_endpoint(payload: BatchSongsPayload):
+    global current_queue, played_history, currently_playing_id, currently_playing_title, current_source, disliked_artists, current_mode, current_mode_param
+    yt = get_yt()
+    found_tracks = []
+    
+    for song_query in payload.songs:
+        sq = (song_query or "").strip()
+        if not sq:
+            continue
+        v_id, p_id = extract_youtube_ids(sq)
+        if p_id:
+            _, pl_tracks = fetch_playlist_tracks(yt, p_id, limit=50)
+            found_tracks.extend(pl_tracks)
+            continue
+        if v_id:
+            meta = get_accurate_metadata(yt, v_id)
+            found_tracks.append(meta)
+            continue
+
+        try:
+            results = yt.search(sq, filter="songs")
+            if not results:
+                results = yt.search(sq)
+            if results:
+                valid = next((r for r in results if r.get('videoId') and (not r.get('artists') or r['artists'][0]['name'].lower() not in [a.lower() for a in disliked_artists])), results[0])
+                if valid.get('videoId'):
+                    artist_name = valid.get('artist') or (valid['artists'][0]['name'] if valid.get('artists') else "Unknown")
+                    found_tracks.append({
+                        "videoId": valid['videoId'],
+                        "title": valid.get('title', sq),
+                        "artist": artist_name
+                    })
+        except Exception as e:
+            print(f"DEBUG: Error buscando canción del lote '{sq}': {e}")
+
+    if not found_tracks:
+        return {"error": "No se encontraron canciones"}
+
+    first_song = found_tracks[0]
+    currently_playing_id = first_song['videoId']
+    currently_playing_title = first_song['title']
+    played_history.insert(0, first_song)
+    current_mode = "song"
+    current_mode_param = ""
+    
+    remaining = found_tracks[1:]
+    src_title = payload.source_name or "Lista seleccionada"
+    # Las restantes canciones de la lista se insertan al inicio de la cola
+    set_queue(remaining, src_title, clear=False, filter_history=False, append=False)
+    
+    return {
+        "currentSong": first_song,
+        "queuedCount": len(remaining),
+        "queueLength": len(current_queue)
+    }
 
 class TrackRequestPayload(BaseModel):
     video_id: str

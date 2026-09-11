@@ -23,7 +23,7 @@ export default function QueueSection({
           type="text" 
           value={manualSearch} 
           onChange={e => setManualSearch(e.target.value)} 
-          placeholder="Añadir link de YouTube a la cola..." 
+          placeholder="Añadir link de canción, playlist o nombre..." 
         />
         <button type="submit">Añadir</button>
       </form>

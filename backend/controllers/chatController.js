@@ -249,6 +249,16 @@ REGLAS OBLIGATORIAS:
       }
     }
 
+    // Detectar si el mensaje contiene un link de YouTube o YouTube Music (playlist o video)
+    const urlMatch = message ? message.match(/https?:\/\/(?:www\.|music\.)?(?:youtube\.com|youtu\.be)\/[^\s]+/i) : null;
+    if (urlMatch) {
+      djDecision.busqueda = urlMatch[0];
+      shouldChangeSong = true;
+      if (!djDecision.locucion || djDecision.locucion.trim() === '') {
+        djComment = "¡Claro que sí! Conectando tu enlace directo para que suene de inmediato.";
+      }
+    }
+
     console.log(`DJ (${searchType || 'song'}): ¿Cambiar música? ${shouldChangeSong ? 'SÍ (' + djDecision.busqueda + ')' : 'NO (respondiendo en chat sin cambiar)'} -> Locución: "${djComment}"`);
 
     audioUrl = await generateTTS(djComment);
@@ -257,22 +267,51 @@ REGLAS OBLIGATORIAS:
       songsSinceLastDJIntervention = 1; // La primera canción del nuevo bloque empieza en 1
       console.log(`[SESIÓN RADIO] Canción en sesión: 1/${targetFrequency || 'Solo Chat'}`);
       
-      let searchQuery = djDecision.busqueda;
-      if (searchType === 'artist' && djDecision.artista) {
-        searchQuery = djDecision.artista;
-      } else if (searchType === 'album' && djDecision.album) {
-        searchQuery = djDecision.album;
-      } else if (searchType === 'playlist' && djDecision.playlist) {
-        searchQuery = djDecision.playlist;
+      // CASO A: Lista de canciones múltiples solicitadas por el usuario
+      if (Array.isArray(djDecision.canciones) && djDecision.canciones.length >= 2) {
+        try {
+          const batchRes = await axios.post(`${PYTHON_SERVICE_URL}/queue/batch-songs`, {
+            songs: djDecision.canciones,
+            source_name: `Tus ${djDecision.canciones.length} canciones pedidas`
+          });
+          if (batchRes.data && batchRes.data.currentSong) {
+            nextSong = batchRes.data.currentSong;
+          }
+        } catch (bErr) {
+          console.error("Error en batch-songs de Python:", bErr.message);
+        }
       }
 
-      try {
-        const searchRes = await axios.get(`${PYTHON_SERVICE_URL}/search`, { 
-          params: { q: searchQuery, type: searchType || 'song' } 
-        });
-        nextSong = searchRes.data;
-      } catch (err) {
-        console.error("Error en search_song:", err.message);
+      // CASO B: Si no fue lista múltiple (o falló), proceder con búsqueda estándar
+      if (!nextSong || !nextSong.videoId) {
+        let finalType = searchType || 'song';
+        let searchQuery = djDecision.busqueda;
+
+        // Si se especificaron múltiples artistas o el usuario pidió modo artista
+        if (Array.isArray(djDecision.artistas) && djDecision.artistas.length >= 2) {
+          searchQuery = djDecision.artistas.join(', ');
+          finalType = 'artist';
+        } else if (searchType === 'artist' && djDecision.artista) {
+          searchQuery = djDecision.artista;
+        } else if (searchType === 'album' && djDecision.album) {
+          searchQuery = djDecision.album;
+        } else if (searchType === 'playlist' && djDecision.playlist) {
+          searchQuery = djDecision.playlist;
+        }
+
+        // Si es un enlace de playlist o video, pasarlo directamente
+        if (urlMatch) {
+          searchQuery = urlMatch[0];
+        }
+
+        try {
+          const searchRes = await axios.get(`${PYTHON_SERVICE_URL}/search`, { 
+            params: { q: searchQuery, type: finalType } 
+          });
+          nextSong = searchRes.data;
+        } catch (err) {
+          console.error("Error en search_song:", err.message);
+        }
       }
 
       if (nextSong && nextSong.videoId) {

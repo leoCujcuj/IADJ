@@ -476,25 +476,28 @@ export default function useDJRadio() {
     const trimmed = manualSearch.trim();
     if (!trimmed) return;
     
-    const isYoutubeLink = trimmed.includes('youtube.com') || trimmed.includes('youtu.be');
-    if (!isYoutubeLink) {
-      showAlert({
-        title: "Enlace no válido",
-        message: "Solo se permiten enlaces directos de canciones o videos de YouTube.",
-        type: "warning"
-      });
-      setManualSearch('');
-      return;
-    }
-    
     try {
-      await fetch(`http://127.0.0.1:8000/queue/add?q=${encodeURIComponent(trimmed)}`, { method: 'POST' });
-      setManualSearch('');
-      syncStatus();
-    } catch (e) { 
-      console.error(e); 
+      const res = await fetch(`http://127.0.0.1:8000/queue/add?q=${encodeURIComponent(trimmed)}`, { method: 'POST' });
+      const data = await res.json();
+      if (data && data.error) {
+        showAlert({
+          title: "No se pudo añadir",
+          message: data.error,
+          type: "warning"
+        });
+      } else {
+        setManualSearch('');
+        syncStatus();
+      }
+    } catch (err) { 
+      console.error(err); 
+      showAlert({
+        title: "Error de Conexión",
+        message: "No se pudo conectar con el servidor para añadir la canción.",
+        type: "danger"
+      });
     }
-  }, [manualSearch, syncStatus]);
+  }, [manualSearch, syncStatus, showAlert]);
 
   const handleMoveInQueue = useCallback(async (videoId, toIndex) => {
     // Si se reordena la cola, la canción siguiente precargada puede ya no ser la primera
