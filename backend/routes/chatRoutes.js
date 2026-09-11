@@ -18,12 +18,16 @@ const {
   handleDeleteSession,
   handleFallbackVideo,
   handleGetFavorites,
-  handleGetFavoriteCount
+  handleGetFavoriteCount,
+  handleRecordHistory
 } = require('../controllers/chatController');
 
 router.post('/chat', handleChat);
 router.post('/preload', handlePreload);
 router.post('/session/transition', handleSessionTransition);
+
+// Ruta para registrar reproducción en el historial oficial de YouTube
+router.post('/history/record/:videoId', handleRecordHistory);
 
 // Ruta para fallback de videos con restricción de iframe en YouTube
 router.get('/video/fallback', handleFallbackVideo);

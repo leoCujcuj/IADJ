@@ -405,6 +405,32 @@ def peek_queue():
         return {"nextSong": current_queue[0], "queueLength": len(current_queue)}
     return {"nextSong": None, "queueLength": 0}
 
+def record_youtube_playback(video_id: str):
+    """Registra la reproducción en el historial oficial de la cuenta de YouTube del usuario"""
+    global auth_status
+    if not video_id:
+        return
+    def _worker():
+        try:
+            yt = get_yt()
+            if auth_status == "logeado":
+                song_data = yt.get_song(video_id)
+                if song_data and 'playbackTracking' in song_data:
+                    res = yt.add_history_item(song_data)
+                    if res.status_code == 204:
+                        print(f"DEBUG: [HISTORIAL YOUTUBE]: Canción {video_id} registrada con éxito en el historial oficial de YouTube.")
+        except Exception as e:
+            print(f"DEBUG: [HISTORIAL YOUTUBE]: Error registrando en historial de YouTube ({video_id}): {e}")
+
+    t = threading.Thread(target=_worker)
+    t.daemon = True
+    t.start()
+
+@app.post("/history/record/{video_id}")
+def record_history_endpoint(video_id: str):
+    record_youtube_playback(video_id)
+    return {"status": "ok", "videoId": video_id}
+
 @app.post("/queue/pop")
 def pop_queue():
     global current_queue, played_history, currently_playing_id, currently_playing_title
@@ -417,6 +443,7 @@ def pop_queue():
         currently_playing_id = song['videoId']
         currently_playing_title = song['title']
         played_history.insert(0, song)
+        record_youtube_playback(song['videoId'])
         if len(current_queue) <= 10:
             ensure_queue_populated(yt, threshold=10, blocking=False)
         return song

@@ -836,6 +836,16 @@ async function handleGetFavoriteCount(req, res) {
   }
 }
 
+async function handleRecordHistory(req, res) {
+  try {
+    const { videoId } = req.params;
+    const response = await axios.post(`${PYTHON_SERVICE_URL}/history/record/${videoId}`, {}, { timeout: 4000 });
+    return res.json(response.data);
+  } catch (error) {
+    return res.json({ status: "error", message: error.message });
+  }
+}
+
 module.exports = {
   handleChat,
   handlePreload,
@@ -854,5 +864,6 @@ module.exports = {
   handleDeleteSession,
   handleFallbackVideo,
   handleGetFavorites,
-  handleGetFavoriteCount
+  handleGetFavoriteCount,
+  handleRecordHistory
 };

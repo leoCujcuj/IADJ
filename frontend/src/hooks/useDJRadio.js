@@ -1030,6 +1030,9 @@ export default function useDJRadio() {
     preloadTriggeredRef.current = null;
     preloadedDataRef.current = null;
 
+    // Sincronizar automáticamente con el historial oficial de la cuenta de YouTube
+    fetch(`http://127.0.0.1:8000/history/record/${currentSong.videoId}`, { method: 'POST' }).catch(() => {});
+
     // Si la canción ya venía con repeatCount desde chatController, usarlo; si no, consultar al backend
     if (currentSong.repeatCount !== undefined) {
       setRepeatCount(currentSong.repeatCount);

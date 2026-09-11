@@ -54,6 +54,11 @@ services:
       - TZ=America/Guatemala
     depends_on:
       - python-service
+    volumes:
+      - ./backend/controllers:/app/controllers
+      - ./backend/routes:/app/routes
+      - ./backend/services:/app/services
+      - ./backend/server.js:/app/server.js
     restart: always
 
   frontend:
