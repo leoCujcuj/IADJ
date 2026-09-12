@@ -4,8 +4,10 @@ const { OPENROUTER_API_KEY, DJ_SYSTEM_PROMPT } = require('../config/constants');
 async function getDJDecision(prompt, customSystemPrompt = null) {
   if (!OPENROUTER_API_KEY) return null;
   const models = [
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "minimax/minimax-m2.7:free"
+    "nex-agi/nex-n2.5-mini:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "liquid/lfm-2.5-2.6b:free",
+    "dots-studio/dots-3-note-preview:free"
   ];
 
   for (const model of models) {

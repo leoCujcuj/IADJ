@@ -121,6 +121,17 @@ function isPureNextRequest(text) {
   return /^(siguiente|next|salta|pasa)(?:\s+(?:canci[oó]n|tema|rola|track|porfa|dj))?$/i.test(t);
 }
 
+function parseMultipleSongs(text) {
+  if (!text) return [];
+  let clean = text.replace(/^(?:pon(?:me)?|reproduce|toca|quiero\s+escuchar|quiero\s+o[ií]r|lista(?:\s+de\s+canciones)?(?:\s*:)?)\s+/i, '').trim();
+  clean = clean.replace(/^[0-9]+\.\s*/, '');
+  // Separar por "+", saltos de línea, comas (con o sin "y"), o " y "
+  let parts = clean.split(/(?:\r?\n|\s*\+\s*|\s*,\s*(?:y\s+|and\s+)?|\s+(?:y|and)\s+|(?:\s+[0-9]+\.\s+))/i);
+  return parts
+    .map(p => p.replace(/^(?:y|and)\s+/i, '').trim())
+    .filter(p => p.length > 1 && !/^(?:y|and|canciones|cancion|rola)$/i.test(p));
+}
+
 async function handleChat(req, res) {
   const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
@@ -267,12 +278,17 @@ REGLAS OBLIGATORIAS:
       songsSinceLastDJIntervention = 1; // La primera canción del nuevo bloque empieza en 1
       console.log(`[SESIÓN RADIO] Canción en sesión: 1/${targetFrequency || 'Solo Chat'}`);
       
-      // CASO A: Lista de canciones múltiples solicitadas por el usuario
-      if (Array.isArray(djDecision.canciones) && djDecision.canciones.length >= 2) {
+      // CASO A: Lista de canciones múltiples solicitadas por el usuario (desde IA o fallback del texto)
+      let candidateSongs = Array.isArray(djDecision.canciones) && djDecision.canciones.length >= 2
+        ? djDecision.canciones
+        : parseMultipleSongs(message);
+
+      if (Array.isArray(candidateSongs) && candidateSongs.length >= 2) {
         try {
+          console.log(`[CHAT MULTI-SONGS]: Detectadas ${candidateSongs.length} canciones para encolar:`, candidateSongs);
           const batchRes = await axios.post(`${PYTHON_SERVICE_URL}/queue/batch-songs`, {
-            songs: djDecision.canciones,
-            source_name: `Tus ${djDecision.canciones.length} canciones pedidas`
+            songs: candidateSongs,
+            source_name: `Tus ${candidateSongs.length} canciones pedidas`
           });
           if (batchRes.data && batchRes.data.currentSong) {
             nextSong = batchRes.data.currentSong;
