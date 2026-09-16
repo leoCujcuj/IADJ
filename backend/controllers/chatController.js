@@ -132,6 +132,27 @@ function parseMultipleSongs(text) {
     .filter(p => p.length > 1 && !/^(?:y|and|canciones|cancion|rola)$/i.test(p));
 }
 
+function isPureArtistRequest(text, detectedArtist) {
+  if (!text) return false;
+  const clean = text
+    .toLowerCase()
+    .replace(/^(?:pon(?:me)?|reproduce|toca|quiero\s+escuchar|quiero\s+o[ií]r|m[uú]sica\s+de|solo|sesi[oó]n\s+de|pon\s+a)\s+/i, '')
+    .replace(/[.?!,]/g, '')
+    .trim();
+  if (!clean) return false;
+  if (detectedArtist && clean === detectedArtist.toLowerCase().trim()) return true;
+  // Si no contiene palabras o conectores de canción ("de", "por", "feat", "-", "album") y es corto
+  if (!/\b(?:de|por|feat|ft|-|album|álbum|cancion|canción|rola)\b/i.test(clean)) {
+    if (detectedArtist && (detectedArtist.toLowerCase().includes(clean) || clean.includes(detectedArtist.toLowerCase()))) {
+      return true;
+    }
+    if (clean.split(/\s+/).length <= 3 && detectedArtist) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function handleChat(req, res) {
   const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
@@ -270,9 +291,7 @@ REGLAS OBLIGATORIAS:
       }
     }
 
-    console.log(`DJ (${searchType || 'song'}): ¿Cambiar música? ${shouldChangeSong ? 'SÍ (' + djDecision.busqueda + ')' : 'NO (respondiendo en chat sin cambiar)'} -> Locución: "${djComment}"`);
-
-    audioUrl = await generateTTS(djComment);
+    console.log(`DJ (${searchType || 'song'}): ¿Cambiar música? ${shouldChangeSong ? 'SÍ (' + djDecision.busqueda + ')' : 'NO (respondiendo en chat sin cambiar)'} -> Locución inicial: "${djComment}"`);
 
     if (shouldChangeSong) {
       songsSinceLastDJIntervention = 1; // La primera canción del nuevo bloque empieza en 1
@@ -299,28 +318,42 @@ REGLAS OBLIGATORIAS:
       }
 
       // CASO B: Si no fue lista múltiple (o falló), proceder con búsqueda estándar
+      let finalType = searchType || 'song';
       if (!nextSong || !nextSong.videoId) {
-        let finalType = searchType || 'song';
         let searchQuery = djDecision.busqueda;
 
-        // Si se especificaron múltiples artistas o el usuario pidió modo artista
-        if (Array.isArray(djDecision.artistas) && djDecision.artistas.length >= 2) {
-          searchQuery = djDecision.artistas.join(', ');
-          finalType = 'artist';
-        } else if (searchType === 'artist' && djDecision.artista) {
-          searchQuery = djDecision.artista;
-        } else if (searchType === 'album' && djDecision.album) {
-          searchQuery = djDecision.album;
-        } else if (searchType === 'playlist' && djDecision.playlist) {
-          searchQuery = djDecision.playlist;
-        }
+        const isArtistReq = searchType === 'artist' ||
+          (Array.isArray(djDecision.artistas) && djDecision.artistas.length >= 2) ||
+          isPureArtistRequest(message, djDecision.artista) ||
+          (djDecision.artista && (!djDecision.cancion || djDecision.cancion.trim() === ''));
 
-        // Si es un enlace de playlist o video, pasarlo directamente
         if (urlMatch) {
           searchQuery = urlMatch[0];
+        } else if (Array.isArray(djDecision.artistas) && djDecision.artistas.length >= 2) {
+          searchQuery = djDecision.artistas.join(', ');
+          finalType = 'artist';
+        } else if (searchType === 'album' || djDecision.album) {
+          searchQuery = djDecision.album || djDecision.busqueda;
+          finalType = 'album';
+        } else if (searchType === 'playlist' || djDecision.playlist) {
+          searchQuery = djDecision.playlist || djDecision.busqueda;
+          finalType = 'playlist';
+        } else if (isArtistReq) {
+          searchQuery = djDecision.artista || djDecision.busqueda || message;
+          finalType = 'artist';
+        } else {
+          finalType = 'song';
+          if (djDecision.cancion && djDecision.artista) {
+            searchQuery = `${djDecision.cancion} ${djDecision.artista}`;
+          } else if (djDecision.cancion) {
+            searchQuery = djDecision.cancion;
+          } else {
+            searchQuery = djDecision.busqueda || message;
+          }
         }
 
         try {
+          console.log(`[CHAT SEARCH]: Buscando en YouTube Music: query="${searchQuery}" (tipo=${finalType})`);
           const searchRes = await axios.get(`${PYTHON_SERVICE_URL}/search`, { 
             params: { q: searchQuery, type: finalType } 
           });
@@ -331,6 +364,21 @@ REGLAS OBLIGATORIAS:
       }
 
       if (nextSong && nextSong.videoId) {
+        const realTitle = nextSong.title;
+        const realArtist = nextSong.artist || nextSong.artists?.[0]?.name || '';
+
+        // Sincronizar locución con la canción REALMENTE devuelta por YouTube
+        if (finalType === 'artist') {
+          if (djDecision.cancion && !realTitle.toLowerCase().includes(djDecision.cancion.toLowerCase())) {
+            djComment = `¡Conectamos con una sesión especial de ${realArtist}! Arrancamos con "${realTitle}".`;
+          }
+        } else if (djDecision.cancion && !realTitle.toLowerCase().includes(djDecision.cancion.toLowerCase())) {
+          djComment = `¡Aquí tienes "${realTitle}" de ${realArtist}!`;
+        }
+
+        // Generar locución de voz después de confirmar la canción real
+        audioUrl = await generateTTS(djComment);
+
         // Precargar letras de inmediato para que la primera canción también tenga traducción lista
         preloadSongLyrics(nextSong.videoId, nextSong.title, nextSong.artist).catch(() => {});
 
@@ -345,9 +393,12 @@ REGLAS OBLIGATORIAS:
         } catch (fErr) {
           nextSong.repeatCount = 1;
         }
+      } else {
+        audioUrl = await generateTTS(djComment);
       }
     } else {
       nextSong = null;
+      audioUrl = await generateTTS(djComment);
     }
 
     res.json({ 
