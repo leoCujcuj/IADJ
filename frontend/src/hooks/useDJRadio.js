@@ -166,6 +166,7 @@ export default function useDJRadio() {
   const preloadAbortControllerRef = useRef(null);
   const preloadedAudioRef = useRef(null);
   const removedVideoIdsRef = useRef(new Set());
+  const executeTransitionRef = useRef(null);
   const blockedVideoIdsRef = useRef(new Set());
   const fallbackAttemptsRef = useRef(new Map());
   const skipToNextImmediatelyRef = useRef(null);
