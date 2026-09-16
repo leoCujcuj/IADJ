@@ -195,14 +195,45 @@ export default function useDJRadio() {
     }
   }, []);
 
-  // --- Audio / Voice Utilities ---
+  // --- Audio / Voice Utilities (100% Nativo en Navegador, 0 APIs Externas) ---
   const speakBrowser = useCallback((text) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'es-ES';
-    utterance.rate = 0.95;
-    window.speechSynthesis.speak(utterance);
+    if (!('speechSynthesis' in window) || !text) return;
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'es-ES';
+      utterance.rate = 0.95;
+
+      // Usar la mejor voz en español instalada en el sistema del usuario
+      const voices = window.speechSynthesis.getVoices();
+      const spanishVoice = voices.find(v => v.lang.startsWith('es') && (v.name.includes('Natural') || v.name.includes('Neural') || v.name.includes('Google') || v.localService)) ||
+                           voices.find(v => v.lang.startsWith('es'));
+      if (spanishVoice) {
+        utterance.voice = spanishVoice;
+      }
+
+      // Atenuar música (audio ducking) mientras habla la voz del navegador
+      if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
+        playerRef.current.setVolume(20);
+      }
+
+      const restoreVolume = () => {
+        if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
+          playerRef.current.setVolume(100);
+        }
+      };
+
+      utterance.onend = restoreVolume;
+      utterance.onerror = restoreVolume;
+
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn("Error en síntesis nativa del navegador:", e);
+    }
   }, []);
 
   const playDJVoice = useCallback((audioUrl, text) => {
@@ -393,7 +424,7 @@ export default function useDJRadio() {
         setCurrentSong(nextSong);
         currentSongRef.current = nextSong;
 
-        if (audioUrl) {
+        if (audioUrl || dj_comment) {
           playDJVoice(audioUrl, dj_comment);
         }
 
