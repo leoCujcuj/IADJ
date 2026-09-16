@@ -41,7 +41,8 @@ Antes de levantar los contenedores, realiza los siguientes pasos de configuraci�
    ```
    Abre `backend/.env` y completa con tus llaves y configuraciones correspondientes:
    * `OPENROUTER_API_KEY`: Tu clave de OpenRouter.
-   * `ELEVENLABS_API_KEY`: Tu clave de ElevenLabs.
+   * `ELEVENLABS_API_KEY`: Tu clave principal de ElevenLabs.
+   * `ELEVENLABS_API_KEY_2`: Clave secundaria de respaldo (se activa automáticamente si la principal agota su cuota).
    * `ELEVENLABS_VOICE_ID`: ID de la voz a utilizar.
 
 2. **Sesión de YouTube Music (Opcional)**:

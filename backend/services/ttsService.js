@@ -1,7 +1,13 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID } = require('../config/constants');
+const crypto = require('crypto');
+const { 
+  ELEVENLABS_API_KEY, 
+  ELEVENLABS_API_KEY_2, 
+  ELEVENLABS_API_KEYS, 
+  ELEVENLABS_VOICE_ID 
+} = require('../config/constants');
 
 const audioFolder = path.join(__dirname, '..', 'temp_audio');
 
@@ -10,12 +16,61 @@ if (!fs.existsSync(audioFolder)) {
   fs.mkdirSync(audioFolder, { recursive: true });
 }
 
-const crypto = require('crypto');
+let activeKeyIndex = 0;
+const exhaustedKeys = new Set();
+
+function getElevenLabsKeys() {
+  const keys = [];
+  const primary = process.env.ELEVENLABS_API_KEY || ELEVENLABS_API_KEY;
+  const secondary = process.env.ELEVENLABS_API_KEY_2 || ELEVENLABS_API_KEY_2;
+  const list = process.env.ELEVENLABS_API_KEYS || ELEVENLABS_API_KEYS;
+
+  if (primary && primary.trim()) keys.push(primary.trim());
+  if (secondary && secondary.trim() && !keys.includes(secondary.trim())) keys.push(secondary.trim());
+  if (list && list.trim()) {
+    list.split(',').map(k => k.trim()).filter(Boolean).forEach(k => {
+      if (!keys.includes(k)) keys.push(k);
+    });
+  }
+  return keys;
+}
+
+function maskKey(key) {
+  if (!key || key.length < 8) return '****';
+  return `${key.slice(0, 4)}...${key.slice(-4)}`;
+}
+
+function getErrorString(data) {
+  if (!data) return '';
+  if (typeof data === 'string') return data;
+  if (Buffer.isBuffer(data)) return data.toString('utf-8');
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf-8');
+  if (typeof data === 'object') {
+    try { return JSON.stringify(data); } catch (e) { return String(data); }
+  }
+  return String(data);
+}
+
+function isQuotaError(error) {
+  if (!error.response) return false;
+  const status = error.response.status;
+  const errStr = getErrorString(error.response.data).toLowerCase();
+
+  if (status === 429) return true;
+  if (errStr.includes("quota_exceeded") ||
+      errStr.includes("insufficient_credits") ||
+      errStr.includes("exceeds your quota") ||
+      (status === 401 && errStr.includes("quota"))) {
+    return true;
+  }
+  return false;
+}
 
 async function generateTTS(text) {
   if (!text || !text.trim()) return null;
-  if (!ELEVENLABS_API_KEY) {
-    console.warn("Advertencia: No hay ELEVENLABS_API_KEY configurada.");
+  const keys = getElevenLabsKeys();
+  if (keys.length === 0) {
+    console.warn("Advertencia: No hay ninguna ELEVENLABS_API_KEY configurada.");
     return null;
   }
 
@@ -35,38 +90,87 @@ async function generateTTS(text) {
       }
     } catch (e) {}
   }
-  
-  try {
-    console.log(`Generando voz con ElevenLabs (Flash ultra-rápido)... (Texto: "${text}")`);
-    const response = await axios.post(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}?optimize_streaming_latency=3`, {
-      text: text,
-      model_id: "eleven_flash_v2_5",
-      voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-    }, {
-      headers: { "xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json" },
-      responseType: 'arraybuffer',
-      timeout: 7000
-    });
 
-    fs.writeFileSync(filePath, response.data);
-    console.log(`Voz generada y guardada en caché: ${fileName}`);
-    return `/audio/${fileName}`;
-  } catch (error) {
-    if (error.response) {
-      const errStr = error.response.data ? error.response.data.toString() : '';
-      if (errStr.includes("quota_exceeded")) {
-        console.warn("[ElevenLabs]: Cuota mensual de caracteres agotada en tu cuenta. Usando voz del navegador.");
-      } else {
-        console.error(`Error ElevenLabs (${error.response.status}):`, errStr);
-      }
-    } else {
-      console.error("Error de red con ElevenLabs:", error.message);
-    }
+  // Comprobar si todas las claves ya están agotadas
+  const availableKeys = keys.filter(k => !exhaustedKeys.has(k));
+  if (availableKeys.length === 0) {
+    console.warn("[ElevenLabs]: Todas las claves han agotado su cuota mensual. Usando voz del navegador.");
     return null;
   }
+
+  // Asegurar que activeKeyIndex apunte a una clave no agotada
+  if (activeKeyIndex >= keys.length || exhaustedKeys.has(keys[activeKeyIndex])) {
+    const nextIdx = keys.findIndex(k => !exhaustedKeys.has(k));
+    if (nextIdx !== -1) {
+      activeKeyIndex = nextIdx;
+    }
+  }
+
+  let attempts = 0;
+  const maxAttempts = keys.length;
+
+  while (attempts < maxAttempts) {
+    const currentKey = keys[activeKeyIndex];
+    if (exhaustedKeys.has(currentKey)) {
+      const nextIdx = keys.findIndex(k => !exhaustedKeys.has(k));
+      if (nextIdx === -1) {
+        console.warn("[ElevenLabs]: Todas las claves han agotado su cuota mensual. Usando voz del navegador.");
+        return null;
+      }
+      activeKeyIndex = nextIdx;
+      continue;
+    }
+
+    attempts++;
+
+    try {
+      console.log(`Generando voz con ElevenLabs (Clave ${activeKeyIndex + 1}/${keys.length} ${maskKey(currentKey)})... (Texto: "${text}")`);
+      const response = await axios.post(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}?optimize_streaming_latency=3`, {
+        text: text,
+        model_id: "eleven_flash_v2_5",
+        voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+      }, {
+        headers: { "xi-api-key": currentKey, "Content-Type": "application/json" },
+        responseType: 'arraybuffer',
+        timeout: 7000
+      });
+
+      fs.writeFileSync(filePath, response.data);
+      console.log(`Voz generada y guardada en caché: ${fileName}`);
+      return `/audio/${fileName}`;
+    } catch (error) {
+      if (isQuotaError(error)) {
+        exhaustedKeys.add(currentKey);
+        const errDetails = getErrorString(error.response?.data);
+        console.warn(`[ElevenLabs]: Clave ${activeKeyIndex + 1} (${maskKey(currentKey)}) agotó su cuota (${error.response?.status}): ${errDetails}`);
+
+        const remaining = keys.filter(k => !exhaustedKeys.has(k));
+        if (remaining.length > 0) {
+          const nextIdx = keys.findIndex(k => !exhaustedKeys.has(k));
+          activeKeyIndex = nextIdx;
+          console.log(`[ElevenLabs]: Cambiando automáticamente a clave ${activeKeyIndex + 1} (${maskKey(keys[activeKeyIndex])}) para esta y las siguientes canciones.`);
+          continue;
+        } else {
+          console.warn("[ElevenLabs]: Cuota agotada en todas las cuentas de ElevenLabs configuradas. Usando voz del navegador.");
+          return null;
+        }
+      } else {
+        if (error.response) {
+          const errStr = getErrorString(error.response.data);
+          console.error(`Error ElevenLabs (${error.response.status}):`, errStr);
+        } else {
+          console.error("Error de red con ElevenLabs:", error.message);
+        }
+        return null;
+      }
+    }
+  }
+
+  return null;
 }
 
 module.exports = {
   generateTTS,
-  audioFolder
+  audioFolder,
+  getElevenLabsKeys
 };
