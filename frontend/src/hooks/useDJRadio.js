@@ -166,8 +166,9 @@ export default function useDJRadio() {
   const preloadAbortControllerRef = useRef(null);
   const preloadedAudioRef = useRef(null);
   const removedVideoIdsRef = useRef(new Set());
-  const executeTransitionRef = useRef(null);
-  const hasRetriedFallbackRef = useRef(false);
+  const blockedVideoIdsRef = useRef(new Set());
+  const fallbackAttemptsRef = useRef(new Map());
+  const skipToNextImmediatelyRef = useRef(null);
 
   const chatEndRef = useRef(null);   
   const audioPlayerRef = useRef(new Audio());
@@ -501,6 +502,32 @@ export default function useDJRadio() {
   const handlePrevious = useCallback(() => {
     handleSendMessage(null, "DJ, pon la canción anterior.");
   }, [handleSendMessage]);
+
+  const skipToNextImmediately = useCallback(async () => {
+    try {
+      console.log("[YouTube Error Handler]: Saltando de inmediato a la siguiente pista de la cola...");
+      const res = await fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' });
+      const nextSong = await res.json();
+      if (nextSong && nextSong.videoId && !blockedVideoIdsRef.current.has(nextSong.videoId)) {
+        setCurrentSong(nextSong);
+        currentSongRef.current = nextSong;
+        if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
+          playerRef.current.loadVideoById(nextSong.videoId);
+        }
+        syncStatus();
+        return;
+      }
+    } catch (err) {
+      console.error("Error en salto rápido de canción bloqueada:", err);
+    }
+    if (executeTransitionRef.current) {
+      executeTransitionRef.current();
+    }
+  }, [syncStatus]);
+
+  useEffect(() => {
+    skipToNextImmediatelyRef.current = skipToNextImmediately;
+  }, [skipToNextImmediately]);
 
   const handleAddManual = useCallback(async (e) => {
     if (e) e.preventDefault();
@@ -999,20 +1026,37 @@ export default function useDJRadio() {
               if (e.data === 0 && executeTransitionRef.current) {
                 executeTransitionRef.current();
               }
+              // e.data === 1 significa reproducción activa exitosa
+              if (e.data === 1 && currentSongRef.current?.title) {
+                const cleanT = (currentSongRef.current.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                fallbackAttemptsRef.current.delete(cleanT);
+              }
             },
             onError: async (e) => {
               const errorCode = e.data;
-              console.warn(`[YouTube Player Error]: Código ${errorCode} en video "${currentSongRef.current?.title}" (${currentSongRef.current?.videoId})`);
-              
-              // Si el video tiene restricción de inserción (101/150) o error de reproducción (2, 5, 100):
-              if (currentSongRef.current?.videoId && !hasRetriedFallbackRef.current) {
-                hasRetriedFallbackRef.current = true;
+              const failedId = currentSongRef.current?.videoId;
+              const songTitle = currentSongRef.current?.title || '';
+              const songArtist = currentSongRef.current?.artist || '';
+              const cleanT = (songTitle || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+              console.warn(`[YouTube Player Error]: Código ${errorCode} en video "${songTitle}" (${failedId})`);
+
+              if (failedId) {
+                blockedVideoIdsRef.current.add(failedId);
+              }
+
+              const attempts = fallbackAttemptsRef.current.get(cleanT) || 0;
+
+              // Solo intentar 1 versión alternativa por canción para evitar bucle
+              if (failedId && attempts === 0 && songTitle) {
+                fallbackAttemptsRef.current.set(cleanT, 1);
                 try {
-                  console.log(`[YouTube Fallback]: Buscando versión reproducible para "${currentSongRef.current.title}"...`);
-                  const res = await fetch(`http://127.0.0.1:3001/api/video/fallback?title=${encodeURIComponent(currentSongRef.current.title)}&artist=${encodeURIComponent(currentSongRef.current.artist || '')}&exclude_id=${currentSongRef.current.videoId}`);
+                  console.log(`[YouTube Fallback]: Buscando versión alternativa reproducible para "${songTitle}"...`);
+                  const excluded = Array.from(blockedVideoIdsRef.current).join(',');
+                  const res = await fetch(`http://127.0.0.1:3001/api/video/fallback?title=${encodeURIComponent(songTitle)}&artist=${encodeURIComponent(songArtist)}&exclude_id=${encodeURIComponent(excluded)}`);
                   const data = await res.json();
-                  if (data.videoId && data.videoId !== currentSongRef.current.videoId) {
-                    console.log(`[YouTube Fallback]: Cambiando a versión reproducible: ${data.videoId} (${data.title})`);
+                  if (data.videoId && !blockedVideoIdsRef.current.has(data.videoId)) {
+                    console.log(`[YouTube Fallback]: Cambiando a versión alternativa: ${data.videoId} (${data.title})`);
                     if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
                       playerRef.current.loadVideoById(data.videoId);
                     }
@@ -1024,10 +1068,11 @@ export default function useDJRadio() {
                 }
               }
 
-              // Si falló el fallback o no hubo alternativa, saltar de inmediato a la siguiente canción
-              console.warn("[YouTube Error]: No se pudo reproducir este video. Saltando a la siguiente canción...");
-              hasRetriedFallbackRef.current = false;
-              if (executeTransitionRef.current) {
+              // Si falló el fallback o ya se intentó para esta canción, saltar de inmediato a una nueva canción de la cola
+              console.warn(`[YouTube Error]: Video bloqueado por derechos o no reproducible (${errorCode}). Saltando inmediatamente a la siguiente pista de la cola.`);
+              if (skipToNextImmediatelyRef.current) {
+                await skipToNextImmediatelyRef.current();
+              } else if (executeTransitionRef.current) {
                 executeTransitionRef.current();
               }
             }
@@ -1058,7 +1103,6 @@ export default function useDJRadio() {
       return;
     }
     currentSongRef.current = currentSong;
-    hasRetriedFallbackRef.current = false;
     setIsLiked(false);
     setIsDisliked(false);
     preloadTriggeredRef.current = null;

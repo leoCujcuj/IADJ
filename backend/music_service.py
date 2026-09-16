@@ -816,11 +816,12 @@ def get_fallback_video(title: str = Query(...), artist: str = Query(""), exclude
     try:
         yt = get_yt()
         query = f"{artist} {title}".strip()
+        excluded_ids = set([x.strip() for x in exclude_id.split(",") if x.strip()])
         # 1. Buscar en videos (los videos oficiales y lyric videos casi siempre permiten inserción en iframe)
         results = yt.search(query, filter="videos")
         for r in results:
             vid = r.get('videoId')
-            if vid and vid != exclude_id:
+            if vid and vid not in excluded_ids:
                 return {
                     "videoId": vid,
                     "title": r.get('title', title),
@@ -830,7 +831,7 @@ def get_fallback_video(title: str = Query(...), artist: str = Query(""), exclude
         results_all = yt.search(query)
         for r in results_all:
             vid = r.get('videoId')
-            if vid and vid != exclude_id:
+            if vid and vid not in excluded_ids:
                 return {
                     "videoId": vid,
                     "title": r.get('title', title),
