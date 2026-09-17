@@ -49,6 +49,8 @@ function App() {
     setPersonality,
     crossfade,
     setCrossfade,
+    autoPauseOnTabChange,
+    setAutoPauseOnTabChange,
     isSettingsOpen,
     setIsSettingsOpen,
     isLyricsOpen,
@@ -173,6 +175,8 @@ function App() {
         setPersonality={setPersonality}
         crossfade={crossfade}
         setCrossfade={setCrossfade}
+        autoPauseOnTabChange={autoPauseOnTabChange}
+        setAutoPauseOnTabChange={setAutoPauseOnTabChange}
         sessionStatus={sessionStatus}
         sessionName={sessionName}
         onNewSession={handleNewSession}

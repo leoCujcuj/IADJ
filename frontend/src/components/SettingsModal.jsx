@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Volume2, Sparkles, Clock, Sliders, Database, RotateCcw } from 'lucide-react';
+import { X, Volume2, Sparkles, Clock, Sliders, Database, RotateCcw, PauseCircle } from 'lucide-react';
 
 export default function SettingsModal({
   isOpen,
@@ -10,6 +10,8 @@ export default function SettingsModal({
   setPersonality,
   crossfade,
   setCrossfade,
+  autoPauseOnTabChange,
+  setAutoPauseOnTabChange,
   sessionStatus = 'idle',
   sessionName = 'Sesión Principal',
   onNewSession
@@ -100,6 +102,27 @@ export default function SettingsModal({
                 type="checkbox"
                 checked={crossfade}
                 onChange={(e) => setCrossfade(e.target.checked)}
+              />
+              <span className="slider round"></span>
+            </label>
+          </div>
+
+          {/* Pausa al cambiar de pestaña o ventana */}
+          <div className="settings-group toggle-group">
+            <div className="toggle-info">
+              <label className="settings-label">
+                <PauseCircle size={18} />
+                <span>Pausar al cambiar de pestaña o ventana</span>
+              </label>
+              <p className="settings-desc">
+                Pausa la música y la locución automáticamente al salir de la pestaña del navegador y la reanuda al volver.
+              </p>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={autoPauseOnTabChange}
+                onChange={(e) => setAutoPauseOnTabChange(e.target.checked)}
               />
               <span className="slider round"></span>
             </label>

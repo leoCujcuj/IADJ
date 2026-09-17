@@ -40,6 +40,9 @@ export default function useDJRadio() {
   const [crossfade, setCrossfadeState] = useState(() => {
     return localStorage.getItem('dj_crossfade') !== 'false';
   });
+  const [autoPauseOnTabChange, setAutoPauseOnTabChangeState] = useState(() => {
+    return localStorage.getItem('dj_auto_pause_tab') === 'true';
+  });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isLyricsOpen, setIsLyricsOpen] = useState(false);
@@ -57,6 +60,12 @@ export default function useDJRadio() {
   const frequencyRef = useRef(frequency);
   const personalityRef = useRef(personality);
   const crossfadeRef = useRef(crossfade);
+  const autoPauseOnTabChangeRef = useRef(autoPauseOnTabChange);
+  const wasPlayingBeforeAutoPauseRef = useRef(false);
+  const wasDJSpeakingBeforeAutoPauseRef = useRef(false);
+  const wasSpeechSpeakingBeforeAutoPauseRef = useRef(false);
+  const tabIdRef = useRef(`tab_${Math.random().toString(36).slice(2, 9)}`);
+  const broadcastChannelRef = useRef(null);
 
   const setFrequency = (val) => {
     setFrequencyState(val);
@@ -72,6 +81,16 @@ export default function useDJRadio() {
     setCrossfadeState(val);
     crossfadeRef.current = val;
     localStorage.setItem('dj_crossfade', val);
+  };
+  const setAutoPauseOnTabChange = (val) => {
+    setAutoPauseOnTabChangeState(val);
+    autoPauseOnTabChangeRef.current = val;
+    localStorage.setItem('dj_auto_pause_tab', val);
+    if (!val) {
+      wasPlayingBeforeAutoPauseRef.current = false;
+      wasDJSpeakingBeforeAutoPauseRef.current = false;
+      wasSpeechSpeakingBeforeAutoPauseRef.current = false;
+    }
   };
 
   // --- Estados de Persistencia de Sesión (PostgreSQL + LocalStorage) ---
@@ -885,6 +904,7 @@ export default function useDJRadio() {
             if (s.settings.frequency !== undefined) setFrequency(s.settings.frequency);
             if (s.settings.personality) setPersonality(s.settings.personality);
             if (s.settings.crossfade !== undefined) setCrossfade(s.settings.crossfade);
+            if (s.settings.autoPauseOnTabChange !== undefined) setAutoPauseOnTabChange(s.settings.autoPauseOnTabChange);
           }
           setSessionStatus('restored');
           console.log('[SESIÓN] Sesión restaurada con éxito desde la Base de Datos.');
@@ -956,7 +976,8 @@ export default function useDJRadio() {
         settings: {
           frequency,
           personality,
-          crossfade
+          crossfade,
+          autoPauseOnTabChange
         }
       };
 
@@ -992,7 +1013,7 @@ export default function useDJRadio() {
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [currentSong, queue, history, chatHistory, frequency, personality, crossfade, sessionId, sessionName]);
+  }, [currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, sessionId, sessionName]);
 
   // Inyección de YouTube Iframe API Script
   useEffect(() => {
@@ -1028,9 +1049,23 @@ export default function useDJRadio() {
                 executeTransitionRef.current();
               }
               // e.data === 1 significa reproducción activa exitosa
-              if (e.data === 1 && currentSongRef.current?.title) {
-                const cleanT = (currentSongRef.current.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-                fallbackAttemptsRef.current.delete(cleanT);
+              if (e.data === 1) {
+                if (currentSongRef.current?.title) {
+                  const cleanT = (currentSongRef.current.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                  fallbackAttemptsRef.current.delete(cleanT);
+                }
+                if (broadcastChannelRef.current) {
+                  try {
+                    broadcastChannelRef.current.postMessage({
+                      type: 'PLAYING_ANOTHER_TAB',
+                      tabId: tabIdRef.current
+                    });
+                  } catch (err) {}
+                }
+              }
+              // e.data === 2 significa pausado en la pestaña visible por el usuario
+              if (e.data === 2 && !document.hidden) {
+                wasPlayingBeforeAutoPauseRef.current = false;
               }
             },
             onError: async (e) => {
@@ -1094,6 +1129,137 @@ export default function useDJRadio() {
 
     return () => {
       if (checkInterval) clearInterval(checkInterval);
+    };
+  }, []);
+
+  // Pausa y reanudación automática al cambiar de pestaña o ventana
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!autoPauseOnTabChangeRef.current) return;
+
+      if (document.hidden) {
+        // 1. Pausar YouTube si está en reproducción activa o cargando
+        try {
+          if (
+            playerRef.current &&
+            typeof playerRef.current.getPlayerState === 'function'
+          ) {
+            const state = playerRef.current.getPlayerState();
+            if (state === 1 || state === 3) {
+              wasPlayingBeforeAutoPauseRef.current = true;
+              playerRef.current.pauseVideo();
+            }
+          }
+        } catch (e) {
+          console.warn('Error al pausar video en segundo plano:', e);
+        }
+
+        // 2. Pausar locución del DJ si está sonando
+        try {
+          if (
+            audioPlayerRef.current &&
+            !audioPlayerRef.current.paused &&
+            !audioPlayerRef.current.ended &&
+            audioPlayerRef.current.currentTime > 0
+          ) {
+            wasDJSpeakingBeforeAutoPauseRef.current = true;
+            audioPlayerRef.current.pause();
+          }
+        } catch (e) {
+          console.warn('Error al pausar audio DJ en segundo plano:', e);
+        }
+
+        // 3. Pausar voz del navegador (SpeechSynthesis) si está activa
+        try {
+          if (
+            typeof window !== 'undefined' &&
+            'speechSynthesis' in window &&
+            window.speechSynthesis.speaking &&
+            !window.speechSynthesis.paused
+          ) {
+            wasSpeechSpeakingBeforeAutoPauseRef.current = true;
+            window.speechSynthesis.pause();
+          }
+        } catch (e) {
+          console.warn('Error al pausar voz del navegador en segundo plano:', e);
+        }
+      } else {
+        // Regreso a la pestaña: reanudar si estaba activo antes del cambio
+        if (wasPlayingBeforeAutoPauseRef.current) {
+          wasPlayingBeforeAutoPauseRef.current = false;
+          try {
+            if (playerRef.current && typeof playerRef.current.playVideo === 'function') {
+              playerRef.current.playVideo();
+            }
+          } catch (e) {
+            console.warn('Error al reanudar video al regresar:', e);
+          }
+        }
+
+        if (wasDJSpeakingBeforeAutoPauseRef.current) {
+          wasDJSpeakingBeforeAutoPauseRef.current = false;
+          try {
+            if (audioPlayerRef.current) {
+              audioPlayerRef.current.play().catch(() => {});
+            }
+          } catch (e) {
+            console.warn('Error al reanudar locución DJ al regresar:', e);
+          }
+        }
+
+        if (wasSpeechSpeakingBeforeAutoPauseRef.current) {
+          wasSpeechSpeakingBeforeAutoPauseRef.current = false;
+          try {
+            if (
+              typeof window !== 'undefined' &&
+              'speechSynthesis' in window &&
+              window.speechSynthesis.paused
+            ) {
+              window.speechSynthesis.resume();
+            }
+          } catch (e) {
+            console.warn('Error al reanudar voz del navegador al regresar:', e);
+          }
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Coordinación multi-pestaña para evitar doble reproducción
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const channel = new BroadcastChannel('gemini_dj_radio_sync');
+        broadcastChannelRef.current = channel;
+
+        channel.onmessage = (event) => {
+          if (!autoPauseOnTabChangeRef.current) return;
+          if (event.data?.type === 'PLAYING_ANOTHER_TAB' && event.data?.tabId !== tabIdRef.current) {
+            if (
+              playerRef.current &&
+              typeof playerRef.current.getPlayerState === 'function' &&
+              playerRef.current.getPlayerState() === 1
+            ) {
+              wasPlayingBeforeAutoPauseRef.current = true;
+              playerRef.current.pauseVideo();
+            }
+            if (audioPlayerRef.current && !audioPlayerRef.current.paused) {
+              wasDJSpeakingBeforeAutoPauseRef.current = true;
+              audioPlayerRef.current.pause();
+            }
+          }
+        };
+      }
+    } catch (e) {
+      console.warn('BroadcastChannel no disponible:', e);
+    }
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (broadcastChannelRef.current) {
+        broadcastChannelRef.current.close();
+        broadcastChannelRef.current = null;
+      }
     };
   }, []);
 
@@ -1331,7 +1497,7 @@ export default function useDJRadio() {
             queue,
             history,
             chat_history: chatHistory,
-            settings: { frequency, personality, crossfade }
+            settings: { frequency, personality, crossfade, autoPauseOnTabChange }
           })
         });
       } catch (e) {
@@ -1366,6 +1532,7 @@ export default function useDJRadio() {
           if (s.settings.frequency !== undefined) setFrequency(s.settings.frequency);
           if (s.settings.personality) setPersonality(s.settings.personality);
           if (s.settings.crossfade !== undefined) setCrossfade(s.settings.crossfade);
+          if (s.settings.autoPauseOnTabChange !== undefined) setAutoPauseOnTabChange(s.settings.autoPauseOnTabChange);
         }
 
         setSessionStatus('restored');
@@ -1376,7 +1543,7 @@ export default function useDJRadio() {
       console.error("Error al conmutar sesión:", err);
       setSessionStatus('error');
     }
-  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, fetchSessions]);
+  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, fetchSessions]);
 
   const handleCreateSession = useCallback(async (customName) => {
     const name = (customName || '').trim() || 'Nueva Estación';
@@ -1394,7 +1561,7 @@ export default function useDJRadio() {
             queue,
             history,
             chat_history: chatHistory,
-            settings: { frequency, personality, crossfade }
+            settings: { frequency, personality, crossfade, autoPauseOnTabChange }
           })
         });
       } catch (e) {}
@@ -1432,7 +1599,7 @@ export default function useDJRadio() {
       console.error("Error creando nueva sesión:", err);
       setSessionStatus('error');
     }
-  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, fetchSessions]);
+  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, fetchSessions]);
 
   const handleRenameSession = useCallback(async (id, newName) => {
     if (!id || !newName.trim()) return;
@@ -1518,6 +1685,8 @@ export default function useDJRadio() {
     setPersonality,
     crossfade,
     setCrossfade,
+    autoPauseOnTabChange,
+    setAutoPauseOnTabChange,
     isSettingsOpen,
     setIsSettingsOpen,
     isLyricsOpen,
