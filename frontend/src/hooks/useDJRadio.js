@@ -43,6 +43,10 @@ export default function useDJRadio() {
   const [autoPauseOnTabChange, setAutoPauseOnTabChangeState] = useState(() => {
     return localStorage.getItem('dj_auto_pause_tab') === 'true';
   });
+  const [duckingVolume, setDuckingVolumeState] = useState(() => {
+    const saved = localStorage.getItem('dj_ducking_volume');
+    return saved !== null ? Number(saved) : 20;
+  });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isLyricsOpen, setIsLyricsOpen] = useState(false);
@@ -61,6 +65,7 @@ export default function useDJRadio() {
   const personalityRef = useRef(personality);
   const crossfadeRef = useRef(crossfade);
   const autoPauseOnTabChangeRef = useRef(autoPauseOnTabChange);
+  const duckingVolumeRef = useRef(duckingVolume);
   const wasPlayingBeforeAutoPauseRef = useRef(false);
   const wasDJSpeakingBeforeAutoPauseRef = useRef(false);
   const wasSpeechSpeakingBeforeAutoPauseRef = useRef(false);
@@ -91,6 +96,12 @@ export default function useDJRadio() {
       wasDJSpeakingBeforeAutoPauseRef.current = false;
       wasSpeechSpeakingBeforeAutoPauseRef.current = false;
     }
+  };
+  const setDuckingVolume = (val) => {
+    const num = Math.max(0, Math.min(100, Number(val)));
+    setDuckingVolumeState(num);
+    duckingVolumeRef.current = num;
+    localStorage.setItem('dj_ducking_volume', num);
   };
 
   // --- Estados de Persistencia de Sesión (PostgreSQL + LocalStorage) ---
@@ -234,8 +245,9 @@ export default function useDJRadio() {
       }
 
       // Atenuar música (audio ducking) mientras habla la voz del navegador
+      const duckVol = typeof duckingVolumeRef.current === 'number' ? duckingVolumeRef.current : 20;
       if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
-        playerRef.current.setVolume(20);
+        playerRef.current.setVolume(duckVol);
       }
 
       const restoreVolume = () => {
@@ -262,8 +274,9 @@ export default function useDJRadio() {
       if (text) speakBrowser(text); 
       return; 
     }
+    const duckVol = typeof duckingVolumeRef.current === 'number' ? duckingVolumeRef.current : 20;
     if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
-      playerRef.current.setVolume(20);
+      playerRef.current.setVolume(duckVol);
     }
     audioPlayerRef.current.src = `http://127.0.0.1:3001${audioUrl}`;
     audioPlayerRef.current.play().catch(() => {
@@ -453,10 +466,13 @@ export default function useDJRadio() {
         if (crossfadeRef.current && playerRef.current && typeof playerRef.current.setVolume === 'function') {
           playerRef.current.setVolume(0);
           let upVol = 0;
+          const targetVol = (audioUrl || dj_comment)
+            ? (typeof duckingVolumeRef.current === 'number' ? duckingVolumeRef.current : 20)
+            : 100;
           const fadeUp = setInterval(() => {
-            upVol = Math.min(100, upVol + 25);
+            upVol = Math.min(targetVol, upVol + 25);
             try { playerRef.current.setVolume(upVol); } catch (e) {}
-            if (upVol >= 100) clearInterval(fadeUp);
+            if (upVol >= targetVol) clearInterval(fadeUp);
           }, 120);
         }
 
@@ -905,6 +921,7 @@ export default function useDJRadio() {
             if (s.settings.personality) setPersonality(s.settings.personality);
             if (s.settings.crossfade !== undefined) setCrossfade(s.settings.crossfade);
             if (s.settings.autoPauseOnTabChange !== undefined) setAutoPauseOnTabChange(s.settings.autoPauseOnTabChange);
+            if (s.settings.duckingVolume !== undefined) setDuckingVolume(s.settings.duckingVolume);
           }
           setSessionStatus('restored');
           console.log('[SESIÓN] Sesión restaurada con éxito desde la Base de Datos.');
@@ -977,7 +994,8 @@ export default function useDJRadio() {
           frequency,
           personality,
           crossfade,
-          autoPauseOnTabChange
+          autoPauseOnTabChange,
+          duckingVolume
         }
       };
 
@@ -1013,7 +1031,7 @@ export default function useDJRadio() {
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, sessionId, sessionName]);
+  }, [currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume, sessionId, sessionName]);
 
   // Inyección de YouTube Iframe API Script
   useEffect(() => {
@@ -1497,7 +1515,7 @@ export default function useDJRadio() {
             queue,
             history,
             chat_history: chatHistory,
-            settings: { frequency, personality, crossfade, autoPauseOnTabChange }
+            settings: { frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume }
           })
         });
       } catch (e) {
@@ -1533,6 +1551,7 @@ export default function useDJRadio() {
           if (s.settings.personality) setPersonality(s.settings.personality);
           if (s.settings.crossfade !== undefined) setCrossfade(s.settings.crossfade);
           if (s.settings.autoPauseOnTabChange !== undefined) setAutoPauseOnTabChange(s.settings.autoPauseOnTabChange);
+          if (s.settings.duckingVolume !== undefined) setDuckingVolume(s.settings.duckingVolume);
         }
 
         setSessionStatus('restored');
@@ -1543,7 +1562,7 @@ export default function useDJRadio() {
       console.error("Error al conmutar sesión:", err);
       setSessionStatus('error');
     }
-  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, fetchSessions]);
+  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume, fetchSessions]);
 
   const handleCreateSession = useCallback(async (customName) => {
     const name = (customName || '').trim() || 'Nueva Estación';
@@ -1561,7 +1580,7 @@ export default function useDJRadio() {
             queue,
             history,
             chat_history: chatHistory,
-            settings: { frequency, personality, crossfade, autoPauseOnTabChange }
+            settings: { frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume }
           })
         });
       } catch (e) {}
@@ -1599,7 +1618,7 @@ export default function useDJRadio() {
       console.error("Error creando nueva sesión:", err);
       setSessionStatus('error');
     }
-  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, fetchSessions]);
+  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume, fetchSessions]);
 
   const handleRenameSession = useCallback(async (id, newName) => {
     if (!id || !newName.trim()) return;
@@ -1687,6 +1706,8 @@ export default function useDJRadio() {
     setCrossfade,
     autoPauseOnTabChange,
     setAutoPauseOnTabChange,
+    duckingVolume,
+    setDuckingVolume,
     isSettingsOpen,
     setIsSettingsOpen,
     isLyricsOpen,

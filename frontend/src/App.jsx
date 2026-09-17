@@ -51,6 +51,8 @@ function App() {
     setCrossfade,
     autoPauseOnTabChange,
     setAutoPauseOnTabChange,
+    duckingVolume,
+    setDuckingVolume,
     isSettingsOpen,
     setIsSettingsOpen,
     isLyricsOpen,
@@ -177,6 +179,8 @@ function App() {
         setCrossfade={setCrossfade}
         autoPauseOnTabChange={autoPauseOnTabChange}
         setAutoPauseOnTabChange={setAutoPauseOnTabChange}
+        duckingVolume={duckingVolume}
+        setDuckingVolume={setDuckingVolume}
         sessionStatus={sessionStatus}
         sessionName={sessionName}
         onNewSession={handleNewSession}
