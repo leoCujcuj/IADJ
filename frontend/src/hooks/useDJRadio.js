@@ -57,8 +57,11 @@ export default function useDJRadio() {
 
   // --- Estados de Canciones Favoritas en Repetición ---
   const [repeatCount, setRepeatCount] = useState(0);
+  const [globalRepeatCount, setGlobalRepeatCount] = useState(0);
   const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
   const [favoritesList, setFavoritesList] = useState([]);
+  const [sessionFavoritesList, setSessionFavoritesList] = useState([]);
+  const [globalFavoritesList, setGlobalFavoritesList] = useState([]);
   const [loadingFavorites, setLoadingFavorites] = useState(false);
 
   const frequencyRef = useRef(frequency);
@@ -173,20 +176,36 @@ export default function useDJRadio() {
     }
   }, []);
 
-  const fetchFavorites = useCallback(async () => {
+  const fetchFavorites = useCallback(async (customSessionId = null) => {
     setLoadingFavorites(true);
+    const targetSessionId = customSessionId || sessionId;
     try {
-      const res = await fetch('http://127.0.0.1:3001/api/favorites/repeats');
-      const data = await res.json();
-      if (data && Array.isArray(data.favorites)) {
-        setFavoritesList(data.favorites);
+      const [sessionRes, globalRes] = await Promise.all([
+        fetch(`http://127.0.0.1:3001/api/favorites/repeats?scope=session&session_id=${encodeURIComponent(targetSessionId)}`),
+        fetch('http://127.0.0.1:3001/api/favorites/repeats?scope=general')
+      ]);
+      const sessionData = await sessionRes.json();
+      const globalData = await globalRes.json();
+
+      if (sessionData && Array.isArray(sessionData.favorites)) {
+        setSessionFavoritesList(sessionData.favorites);
+      } else {
+        setSessionFavoritesList([]);
+      }
+
+      if (globalData && Array.isArray(globalData.favorites)) {
+        setGlobalFavoritesList(globalData.favorites);
+        setFavoritesList(globalData.favorites);
+      } else {
+        setGlobalFavoritesList([]);
+        setFavoritesList([]);
       }
     } catch (e) {
       console.warn("Error cargando lista de favoritas en repetición:", e);
     } finally {
       setLoadingFavorites(false);
     }
-  }, []);
+  }, [sessionId]);
 
   const playerRef = useRef(null);
   const currentSongRef = useRef(null);
@@ -378,7 +397,8 @@ export default function useDJRadio() {
           searchType,
           personality: personalityRef.current,
           frequency: frequencyRef.current,
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          session_id: sessionId
         })
       });
       const data = await response.json();
@@ -392,6 +412,12 @@ export default function useDJRadio() {
         preloadedDataRef.current = null;
         preloadTriggeredRef.current = null;
         removedVideoIdsRef.current.clear();
+        if (data.nextSong.repeatCount !== undefined) {
+          setRepeatCount(data.nextSong.repeatCount);
+        }
+        if (data.nextSong.globalRepeatCount !== undefined) {
+          setGlobalRepeatCount(data.nextSong.globalRepeatCount);
+        }
         setCurrentSong(data.nextSong);
         currentSongRef.current = data.nextSong;
         syncStatus();
@@ -401,7 +427,7 @@ export default function useDJRadio() {
     } finally { 
       setLoading(false); 
     }
-  }, [message, searchType, playDJVoice, syncStatus]);
+  }, [message, searchType, playDJVoice, syncStatus, sessionId]);
 
   const executeTransition = useCallback(() => {
     // Si la canción ya fue precargada con anticipación a los 30s
@@ -677,21 +703,30 @@ export default function useDJRadio() {
     setIsLiked(true);
     setDislikeStreak(0);
     setRepeatCount(prev => prev + 1);
+    setGlobalRepeatCount(prev => prev + 1);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/like/${currentSong.videoId}?artist=${encodeURIComponent(currentSong.artist)}&current_title=${encodeURIComponent(currentSong.title)}`, { 
+      const res = await fetch(`http://127.0.0.1:8000/like/${currentSong.videoId}?artist=${encodeURIComponent(currentSong.artist)}&current_title=${encodeURIComponent(currentSong.title)}&session_id=${encodeURIComponent(sessionId)}`, { 
         method: 'POST' 
       });
       const data = await res.json();
-      if (data && data.repeat_count !== undefined) {
-        setRepeatCount(data.repeat_count);
+      if (data) {
+        if (data.session_repeat_count !== undefined) {
+          setRepeatCount(data.session_repeat_count);
+        } else if (data.repeat_count !== undefined) {
+          setRepeatCount(data.repeat_count);
+        }
+        if (data.global_repeat_count !== undefined) {
+          setGlobalRepeatCount(data.global_repeat_count);
+        }
       }
       syncStatus();
     } catch (e) { 
       setIsLiked(false); 
       setRepeatCount(prev => Math.max(0, prev - 1));
+      setGlobalRepeatCount(prev => Math.max(0, prev - 1));
       console.error(e); 
     }
-  }, [currentSong, isLiked, syncStatus]);
+  }, [currentSong, isLiked, sessionId, syncStatus]);
 
   const handleDislike = useCallback(async () => {
     if (!currentSong || isDisliked) return;
@@ -1285,6 +1320,7 @@ export default function useDJRadio() {
   useEffect(() => {
     if (!currentSong?.videoId) {
       setRepeatCount(0);
+      setGlobalRepeatCount(0);
       return;
     }
     currentSongRef.current = currentSong;
@@ -1296,19 +1332,31 @@ export default function useDJRadio() {
     // Sincronizar automáticamente con el historial oficial de la cuenta de YouTube
     fetch(`http://127.0.0.1:8000/history/record/${currentSong.videoId}`, { method: 'POST' }).catch(() => {});
 
-    // Si la canción ya venía con repeatCount desde chatController, usarlo; si no, consultar al backend
-    if (currentSong.repeatCount !== undefined) {
-      setRepeatCount(currentSong.repeatCount);
-    } else {
-      fetch(`http://127.0.0.1:3001/api/favorites/count/${currentSong.videoId}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.totalCount !== undefined) {
-            setRepeatCount(data.totalCount);
+    // Consultar contadores de repetición al backend (por estación y global)
+    fetch(`http://127.0.0.1:3001/api/favorites/count/${currentSong.videoId}?session_id=${encodeURIComponent(sessionId)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data) {
+          if (data.sessionCount !== undefined) {
+            setRepeatCount(data.sessionCount);
+          } else if (currentSong.repeatCount !== undefined) {
+            setRepeatCount(currentSong.repeatCount);
           }
-        })
-        .catch(() => {});
-    }
+          if (data.totalCount !== undefined) {
+            setGlobalRepeatCount(data.totalCount);
+          } else if (currentSong.globalRepeatCount !== undefined) {
+            setGlobalRepeatCount(currentSong.globalRepeatCount);
+          }
+        }
+      })
+      .catch(() => {
+        if (currentSong.repeatCount !== undefined) {
+          setRepeatCount(currentSong.repeatCount);
+        }
+        if (currentSong.globalRepeatCount !== undefined) {
+          setGlobalRepeatCount(currentSong.globalRepeatCount);
+        }
+      });
 
     if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
       playerRef.current.loadVideoById(currentSong.videoId);
@@ -1320,7 +1368,7 @@ export default function useDJRadio() {
       }, 800);
       return () => clearTimeout(retryTimer);
     }
-  }, [currentSong?.videoId]);
+  }, [currentSong?.videoId, sessionId]);
 
   // Ticker de monitoreo para precargar a los últimos 30 segundos
   useEffect(() => {
@@ -1746,9 +1794,13 @@ export default function useDJRadio() {
     // Favoritos en repetición
     repeatCount,
     setRepeatCount,
+    globalRepeatCount,
+    setGlobalRepeatCount,
     isFavoritesOpen,
     setIsFavoritesOpen,
     favoritesList,
+    sessionFavoritesList,
+    globalFavoritesList,
     loadingFavorites,
     fetchFavorites
   };

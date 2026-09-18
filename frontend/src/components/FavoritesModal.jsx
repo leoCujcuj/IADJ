@@ -1,14 +1,23 @@
-import React from 'react';
-import { X, Flame, Play, ThumbsUp, MessageSquare, Trophy, Award } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Flame, Play, ThumbsUp, MessageSquare, Trophy, Award, Radio } from 'lucide-react';
 
 export default function FavoritesModal({
   isOpen,
   onClose,
+  sessionFavorites = [],
+  globalFavorites = [],
   favorites = [],
+  sessionName = 'Esta Estación',
   onPlaySong,
   loading = false
 }) {
+  const [activeTab, setActiveTab] = useState('session'); // 'session' | 'general'
+
   if (!isOpen) return null;
+
+  const currentFavorites = activeTab === 'session' 
+    ? (sessionFavorites.length > 0 || globalFavorites.length > 0 ? sessionFavorites : favorites)
+    : (globalFavorites.length > 0 ? globalFavorites : favorites);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -18,7 +27,7 @@ export default function FavoritesModal({
         role="dialog"
         aria-labelledby="favorites-modal-title"
       >
-        {/* Encabezado limpio acorde a los demás modales */}
+        {/* Encabezado acorde al resto de modales */}
         <div className="modal-header">
           <div className="modal-title-row">
             <div className="modal-icon-badge flame-badge">
@@ -34,22 +43,56 @@ export default function FavoritesModal({
           </button>
         </div>
 
+        {/* Pestañas de alcance: Esta Estación vs General */}
+        <div className="favorites-scope-tabs">
+          <button 
+            type="button"
+            className={`favorites-scope-tab ${activeTab === 'session' ? 'active' : ''}`}
+            onClick={() => setActiveTab('session')}
+          >
+            <Radio size={15} />
+            <span className="tab-label">Esta Estación</span>
+            <span className="tab-pill-badge">{sessionFavorites.length}</span>
+          </button>
+          <button 
+            type="button"
+            className={`favorites-scope-tab ${activeTab === 'general' ? 'active' : ''}`}
+            onClick={() => setActiveTab('general')}
+          >
+            <Flame size={15} />
+            <span className="tab-label">General (Todas)</span>
+            <span className="tab-pill-badge">{globalFavorites.length > 0 ? globalFavorites.length : favorites.length}</span>
+          </button>
+        </div>
+
         <div className="modal-body favorites-modal-body">
           {loading ? (
             <div className="favorites-empty-state">
               <p>Cargando lista de repeticiones...</p>
             </div>
-          ) : favorites.length === 0 ? (
+          ) : currentFavorites.length === 0 ? (
             <div className="favorites-empty-state">
-              <Flame size={40} className="empty-flame-icon" />
-              <h3>Aún no tienes canciones en repetición</h3>
-              <p>
-                Pide canciones al DJ en el chat o márcalas con Me gusta para que aparezcan en esta sección.
-              </p>
+              {activeTab === 'session' ? (
+                <>
+                  <Radio size={40} className="empty-flame-icon" />
+                  <h3>Sin repeticiones en esta estación</h3>
+                  <p>
+                    Pide canciones al DJ en el chat o márcalas con Me gusta dentro de esta estación para que aparezcan aquí.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Flame size={40} className="empty-flame-icon" />
+                  <h3>Aún no tienes canciones en repetición</h3>
+                  <p>
+                    Pide canciones al DJ en el chat o márcalas con Me gusta para que aparezcan en esta sección.
+                  </p>
+                </>
+              )}
             </div>
           ) : (
             <div className="favorites-list">
-              {favorites.map((song, index) => {
+              {currentFavorites.map((song, index) => {
                 const rank = index + 1;
                 const isTop1 = rank === 1;
                 const isTop2 = rank === 2;
@@ -77,7 +120,7 @@ export default function FavoritesModal({
                     <div className="favorite-badges">
                       <span 
                         className="fav-count-pill total-pill" 
-                        title={`Reproducida ${song.totalCount} veces en total`}
+                        title={`Reproducida ${song.totalCount} veces ${activeTab === 'session' ? 'en esta estación' : 'en total'}`}
                       >
                         <Flame size={12} className="inline-flame" />
                         <span>{song.totalCount}x</span>

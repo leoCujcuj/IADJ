@@ -370,6 +370,17 @@ body, html {
   filter: drop-shadow(0 0 4px rgba(249, 115, 22, 0.6));
 }
 
+.repeat-badge-global {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.18), rgba(236, 72, 153, 0.15));
+  color: #c084fc;
+  border-color: rgba(168, 85, 247, 0.35);
+}
+
+.repeat-badge-global .repeat-badge-flame {
+  color: #c084fc;
+  filter: drop-shadow(0 0 4px rgba(168, 85, 247, 0.6));
+}
+
 @keyframes repeat-pulse {
   0%, 100% { box-shadow: 0 0 0 rgba(249, 115, 22, 0); }
   50% { box-shadow: 0 0 8px rgba(249, 115, 22, 0.35); }
@@ -2172,6 +2183,61 @@ input:checked + .slider:before {
 .favorites-modal {
   max-width: 520px;
   width: 100%;
+}
+
+.favorites-scope-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 1.5rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.favorites-scope-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.favorites-scope-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.favorites-scope-tab.active {
+  background: rgba(249, 115, 22, 0.12);
+  border-color: rgba(249, 115, 22, 0.45);
+  color: #f97316;
+  box-shadow: 0 0 12px rgba(249, 115, 22, 0.15);
+}
+
+.favorites-scope-tab .tab-pill-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+}
+
+.favorites-scope-tab.active .tab-pill-badge {
+  background: rgba(249, 115, 22, 0.25);
+  color: #ffedd5;
 }
 
 .favorites-modal-body {

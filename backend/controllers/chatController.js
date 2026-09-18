@@ -154,7 +154,7 @@ function isPureArtistRequest(text, detectedArtist) {
 }
 
 async function handleChat(req, res) {
-  const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone } = req.body;
+  const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone, session_id } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
   const timeContext = getTimeContext(timeZone);
   
@@ -387,11 +387,14 @@ REGLAS OBLIGATORIAS:
           const favRes = await axios.post(`${PYTHON_SERVICE_URL}/favorites/track-request`, {
             video_id: nextSong.videoId,
             title: nextSong.title,
-            artist: nextSong.artist
+            artist: nextSong.artist,
+            session_id: session_id || null
           }, { timeout: 3000 });
-          nextSong.repeatCount = favRes.data?.total_count || 1;
+          nextSong.repeatCount = favRes.data?.session_total_count || favRes.data?.total_count || 1;
+          nextSong.globalRepeatCount = favRes.data?.total_count || 1;
         } catch (fErr) {
           nextSong.repeatCount = 1;
+          nextSong.globalRepeatCount = 1;
         }
       } else {
         audioUrl = await generateTTS(djComment);
@@ -515,8 +518,19 @@ async function fastTranslateText(text) {
         .replace(/&gt;/g, ">");
     }
   } catch (err) {
-    console.error("Error en fastTranslateText:", err.message);
+    console.error("Error en fastTranslateText (Google):", err.message);
   }
+
+  // Fallback MyMemory para bloques de texto compactos
+  try {
+    const cleanedText = text.substring(0, 450);
+    const myMemoryUrl = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(cleanedText) + "&langpair=auto|es";
+    const mmRes = await axios.get(myMemoryUrl, { timeout: 4000 });
+    if (mmRes.data?.responseData?.translatedText) {
+      return mmRes.data.responseData.translatedText;
+    }
+  } catch (mErr) {}
+
   return null;
 }
 
@@ -535,9 +549,9 @@ async function translateLyrics(textArray, videoId) {
   }
 
   try {
-    // Usar etiquetas con índice exacto [0], [1], [2] para evitar cualquier desfasamiento de versos
+    // 1. Intentar traducción rápida con etiquetas de índice [0], [1], [2]
     const taggedPayload = textArray.map((line, idx) => `[${idx}] ${line || ' '}`).join('\n');
-    const translatedBlock = await fastTranslateText(taggedPayload);
+    let translatedBlock = await fastTranslateText(taggedPayload);
     
     if (translatedBlock) {
       const resultMap = new Map();
@@ -549,18 +563,38 @@ async function translateLyrics(textArray, videoId) {
         resultMap.set(index, translatedText);
       }
 
-      // Reconstruir el array respetando exactamente el orden e índice original
-      const alignedTranslations = textArray.map((originalLine, idx) => {
-        if (!originalLine || !originalLine.trim()) return '';
-        return resultMap.get(idx) || '';
-      });
+      if (resultMap.size > 0) {
+        const alignedTranslations = textArray.map((originalLine, idx) => {
+          if (!originalLine || !originalLine.trim()) return '';
+          return resultMap.get(idx) || '';
+        });
 
-      fs.writeFileSync(cacheFile, JSON.stringify(alignedTranslations));
-      console.log(`[LYRICS TRADUCIDAS ALINEADAS 1:1]: ${alignedTranslations.length} versos para ${videoId}`);
-      return alignedTranslations;
+        fs.writeFileSync(cacheFile, JSON.stringify(alignedTranslations));
+        console.log(`[LYRICS TRADUCIDAS ALINEADAS 1:1]: ${alignedTranslations.length} versos para ${videoId}`);
+        return alignedTranslations;
+      }
     }
   } catch (err) {
-    console.error("Error traduciendo letras:", err.message);
+    console.error("Error traduciendo letras con scraper:", err.message);
+  }
+
+  // 2. Fallback Inteligente con DJ AI
+  try {
+    const aiPrompt = `Traduce cada una de estas líneas de canción al español manteniendo la misma cantidad e índice:
+${textArray.slice(0, 50).map((l, i) => `[${i}] ${l}`).join('\n')}
+
+Devuelve un JSON plano:
+{"translations": ["...", "..."]}`;
+
+    const decision = await getDJDecision(aiPrompt, "Eres un traductor musical profesional. Devuelve EXCLUSIVAMENTE un JSON con la propiedad 'translations' que contenga el array de versos traducidos al español.");
+    if (decision && Array.isArray(decision.translations) && decision.translations.length > 0) {
+      const fullAligned = textArray.map((_, idx) => decision.translations[idx] || '');
+      fs.writeFileSync(cacheFile, JSON.stringify(fullAligned));
+      console.log(`[LYRICS TRADUCIDAS CON DJ AI]: ${fullAligned.length} versos para ${videoId}`);
+      return fullAligned;
+    }
+  } catch (aiErr) {
+    console.error("Error en fallback DJ AI para traducción de letras:", aiErr.message);
   }
 
   return [];
@@ -919,26 +953,30 @@ async function handleFallbackVideo(req, res) {
 async function handleGetFavorites(req, res) {
   try {
     const limit = req.query.limit || 30;
+    const scope = req.query.scope || 'general';
+    const sessionId = req.query.session_id || null;
     const response = await axios.get(`${PYTHON_SERVICE_URL}/favorites/repeats`, {
-      params: { limit },
+      params: { limit, scope, session_id: sessionId },
       timeout: 5000
     });
     return res.json(response.data);
   } catch (error) {
     console.error("Error obteniendo favoritas:", error.message);
-    return res.json({ favorites: [] });
+    return res.json({ favorites: [], scope: req.query.scope || 'general' });
   }
 }
 
 async function handleGetFavoriteCount(req, res) {
   try {
     const { videoId } = req.params;
+    const sessionId = req.query.session_id || null;
     const response = await axios.get(`${PYTHON_SERVICE_URL}/favorites/count/${videoId}`, {
+      params: { session_id: sessionId },
       timeout: 3000
     });
     return res.json(response.data);
   } catch (error) {
-    return res.json({ totalCount: 0, requestCount: 0, likeCount: 0 });
+    return res.json({ totalCount: 0, requestCount: 0, likeCount: 0, sessionCount: 0 });
   }
 }
 

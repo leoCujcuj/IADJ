@@ -4,6 +4,7 @@ import { Music, ThumbsUp, ThumbsDown, SkipForward, Mic2, Sparkles, Loader2, Flam
 export default function PlayerCard({
   currentSong,
   repeatCount = 0,
+  globalRepeatCount = 0,
   isLiked,
   isDisliked,
   handleLike,
@@ -24,14 +25,23 @@ export default function PlayerCard({
                 <span className="now-playing-badge">
                   <span className="live-dot"></span> Sonando ahora
                 </span>
-                {repeatCount >= 2 && (
+                {repeatCount >= 2 ? (
                   <span 
                     className="repeat-badge" 
-                    title={`Has pedido o dado like a esta canción ${repeatCount} veces`}
+                    title={globalRepeatCount > repeatCount 
+                      ? `${repeatCount} veces en esta estación (${globalRepeatCount} en total)` 
+                      : `Has pedido o dado like a esta canción ${repeatCount} veces en esta estación`}
                   >
-                    <Flame size={13} className="repeat-badge-flame" /> En repetición ({repeatCount}x)
+                    <Flame size={13} className="repeat-badge-flame" /> En repetición ({repeatCount}x estación{globalRepeatCount > repeatCount ? ` • ${globalRepeatCount}x general` : ''})
                   </span>
-                )}
+                ) : globalRepeatCount >= 2 ? (
+                  <span 
+                    className="repeat-badge repeat-badge-global" 
+                    title={`Has pedido o dado like a esta canción ${globalRepeatCount} veces en general`}
+                  >
+                    <Flame size={13} className="repeat-badge-flame" /> En repetición ({globalRepeatCount}x general)
+                  </span>
+                ) : null}
               </div>
               <h2 className="song-header-title" title={currentSong.title}>
                 {currentSong.title}

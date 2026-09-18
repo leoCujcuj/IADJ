@@ -82,9 +82,12 @@ function App() {
     showAlert,
     playerRef,
     repeatCount,
+    globalRepeatCount,
     isFavoritesOpen,
     setIsFavoritesOpen,
     favoritesList,
+    sessionFavoritesList,
+    globalFavoritesList,
     loadingFavorites,
     fetchFavorites
   } = useDJRadio();
@@ -126,6 +129,7 @@ function App() {
             <PlayerCard
               currentSong={currentSong}
               repeatCount={repeatCount}
+              globalRepeatCount={globalRepeatCount}
               isLiked={isLiked}
               isDisliked={isDisliked}
               handleLike={handleLike}
@@ -202,7 +206,10 @@ function App() {
       <FavoritesModal
         isOpen={isFavoritesOpen}
         onClose={() => setIsFavoritesOpen(false)}
+        sessionFavorites={sessionFavoritesList}
+        globalFavorites={globalFavoritesList}
         favorites={favoritesList}
+        sessionName={sessionName}
         loading={loadingFavorites}
         onPlaySong={(song) => {
           handleSendMessage(null, `Pon la canción ${song.title} de ${song.artist}`);

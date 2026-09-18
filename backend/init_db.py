@@ -91,9 +91,21 @@ def init_db():
                     total_count INT DEFAULT 0,
                     last_played_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS session_song_repeats (
+                    session_id VARCHAR(64) NOT NULL,
+                    video_id VARCHAR(64) NOT NULL,
+                    title TEXT NOT NULL,
+                    artist TEXT NOT NULL,
+                    request_count INT DEFAULT 0,
+                    like_count INT DEFAULT 0,
+                    total_count INT DEFAULT 0,
+                    last_played_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (session_id, video_id)
+                );
             """)
             conn.commit()
-            print("✅ Tablas 'user_tokens', 'radio_sessions', 'session_interactions' y 'song_favorites_repeats' listas.")
+            print("Tablas 'user_tokens', 'radio_sessions', 'session_interactions', 'song_favorites_repeats' y 'session_song_repeats' listas.")
             cur.close()
             conn.close()
             break

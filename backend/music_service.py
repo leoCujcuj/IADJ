@@ -925,19 +925,27 @@ class TrackRequestPayload(BaseModel):
     video_id: str
     title: str
     artist: str
+    session_id: Optional[str] = None
 
-def record_favorite_interaction(video_id: str, title: str, artist: str, interaction_type: str = "request"):
+def record_favorite_interaction(video_id: str, title: str, artist: str, interaction_type: str = "request", session_id: Optional[str] = None):
     if not video_id:
-        return {"total_count": 0, "request_count": 0, "like_count": 0}
+        return {"total_count": 0, "request_count": 0, "like_count": 0, "session_total_count": 0}
     title_clean = title or "Desconocido"
     artist_clean = artist or "Desconocido"
     conn = get_db_connection()
     if not conn:
-        return {"total_count": 1, "request_count": 1 if interaction_type == "request" else 0, "like_count": 1 if interaction_type == "like" else 0}
+        return {
+            "total_count": 1,
+            "request_count": 1 if interaction_type == "request" else 0,
+            "like_count": 1 if interaction_type == "like" else 0,
+            "session_total_count": 1 if session_id else 0
+        }
     try:
         cur = conn.cursor()
         is_req = 1 if interaction_type == "request" else 0
         is_like = 1 if interaction_type == "like" else 0
+        
+        # 1. Registro global en song_favorites_repeats
         cur.execute("""
             INSERT INTO song_favorites_repeats (video_id, title, artist, request_count, like_count, total_count, last_played_at)
             VALUES (%s, %s, %s, %s, %s, 1, CURRENT_TIMESTAMP)
@@ -951,6 +959,39 @@ def record_favorite_interaction(video_id: str, title: str, artist: str, interact
             RETURNING total_count, request_count, like_count;
         """, (video_id, title_clean, artist_clean, is_req, is_like))
         row = cur.fetchone()
+        global_total = row[0] if row else 1
+        global_req = row[1] if row else is_req
+        global_like = row[2] if row else is_like
+
+        session_total = 0
+        session_req = 0
+        session_like = 0
+
+        # 2. Si se proporciona session_id, registrar en session_song_repeats y session_interactions
+        if session_id:
+            cur.execute("""
+                INSERT INTO session_song_repeats (session_id, video_id, title, artist, request_count, like_count, total_count, last_played_at)
+                VALUES (%s, %s, %s, %s, %s, %s, 1, CURRENT_TIMESTAMP)
+                ON CONFLICT (session_id, video_id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    artist = EXCLUDED.artist,
+                    request_count = session_song_repeats.request_count + EXCLUDED.request_count,
+                    like_count = session_song_repeats.like_count + EXCLUDED.like_count,
+                    total_count = session_song_repeats.total_count + 1,
+                    last_played_at = CURRENT_TIMESTAMP
+                RETURNING total_count, request_count, like_count;
+            """, (session_id, video_id, title_clean, artist_clean, is_req, is_like))
+            s_row = cur.fetchone()
+            if s_row:
+                session_total = s_row[0]
+                session_req = s_row[1]
+                session_like = s_row[2]
+
+            cur.execute("""
+                INSERT INTO session_interactions (session_id, video_id, title, artist, interaction_type)
+                VALUES (%s, %s, %s, %s, %s);
+            """, (session_id, video_id, title_clean, artist_clean, interaction_type))
+
         conn.commit()
         cur.close()
         conn.close()
@@ -958,23 +999,31 @@ def record_favorite_interaction(video_id: str, title: str, artist: str, interact
             "video_id": video_id,
             "title": title_clean,
             "artist": artist_clean,
-            "total_count": row[0] if row else 1,
-            "request_count": row[1] if row else is_req,
-            "like_count": row[2] if row else is_like
+            "total_count": global_total,
+            "request_count": global_req,
+            "like_count": global_like,
+            "session_total_count": session_total,
+            "session_request_count": session_req,
+            "session_like_count": session_like
         }
     except Exception as e:
         print(f"Error registrando repetición favorita: {e}")
         if conn:
             conn.close()
-        return {"total_count": 1, "request_count": 1 if interaction_type == "request" else 0, "like_count": 1 if interaction_type == "like" else 0}
+        return {
+            "total_count": 1, 
+            "request_count": 1 if interaction_type == "request" else 0, 
+            "like_count": 1 if interaction_type == "like" else 0,
+            "session_total_count": 0
+        }
 
 @app.post("/like/{video_id}")
-def handle_like(video_id: str, artist: str, current_title: Optional[str] = Query(None)):
+def handle_like(video_id: str, artist: str, current_title: Optional[str] = Query(None), session_id: Optional[str] = Query(None)):
     global currently_playing_id, currently_playing_title
     currently_playing_id = video_id; currently_playing_title = current_title or ""
     
-    # Registrar interacción de Like en el contador de favoritas
-    fav_data = record_favorite_interaction(video_id, current_title or currently_playing_title or "Canción", artist, "like")
+    # Registrar interacción de Like en el contador de favoritas (global y por estación)
+    fav_data = record_favorite_interaction(video_id, current_title or currently_playing_title or "Canción", artist, "like", session_id=session_id)
     
     try:
         yt = get_yt()
@@ -982,66 +1031,173 @@ def handle_like(video_id: str, artist: str, current_title: Optional[str] = Query
         
         radio_tracks = get_song_radio(yt, video_id, limit=20)
         set_queue(radio_tracks, f"Basado en {artist}", clear=False)
-        return {"status": "liked", "repeat_count": fav_data.get("total_count", 1)}
+        return {
+            "status": "liked", 
+            "repeat_count": fav_data.get("session_total_count") or fav_data.get("total_count", 1),
+            "global_repeat_count": fav_data.get("total_count", 1),
+            "session_repeat_count": fav_data.get("session_total_count", 1)
+        }
     except Exception as e:
-        return {"status": "liked", "repeat_count": fav_data.get("total_count", 1), "error": str(e)}
+        return {
+            "status": "liked", 
+            "repeat_count": fav_data.get("session_total_count") or fav_data.get("total_count", 1),
+            "global_repeat_count": fav_data.get("total_count", 1),
+            "session_repeat_count": fav_data.get("session_total_count", 1),
+            "error": str(e)
+        }
 
 @app.post("/favorites/track-request")
 def track_favorite_request(payload: TrackRequestPayload):
-    data = record_favorite_interaction(payload.video_id, payload.title, payload.artist, "request")
+    data = record_favorite_interaction(payload.video_id, payload.title, payload.artist, "request", session_id=payload.session_id)
     return data
 
 @app.get("/favorites/repeats")
-def get_favorite_repeats(limit: int = 30):
+def get_favorite_repeats(limit: int = 30, session_id: Optional[str] = Query(None), scope: str = Query("general")):
     conn = get_db_connection()
     if not conn:
         return {"favorites": []}
     try:
         cur = conn.cursor()
-        cur.execute("""
-            SELECT video_id, title, artist, request_count, like_count, total_count, last_played_at
-            FROM song_favorites_repeats
-            WHERE total_count >= 1
-            ORDER BY total_count DESC, last_played_at DESC
-            LIMIT %s;
-        """, (limit,))
-        rows = cur.fetchall()
+        if scope == "session" and session_id:
+            # 1. Obtener de la tabla session_song_repeats
+            cur.execute("""
+                SELECT video_id, title, artist, request_count, like_count, total_count, last_played_at
+                FROM session_song_repeats
+                WHERE session_id = %s AND total_count >= 1
+                ORDER BY total_count DESC, last_played_at DESC
+                LIMIT %s;
+            """, (session_id, limit))
+            rows = cur.fetchall()
+
+            favorites_dict = {}
+            for r in rows:
+                favorites_dict[r[0]] = {
+                    "videoId": r[0],
+                    "title": r[1],
+                    "artist": r[2],
+                    "requestCount": r[3],
+                    "likeCount": r[4],
+                    "totalCount": r[5],
+                    "lastPlayedAt": r[6].isoformat() if r[6] else None
+                }
+
+            # 2. Agregar o consolidar con canciones que se hayan reproducido varias veces en el historial de la sesión
+            try:
+                cur.execute("SELECT history FROM radio_sessions WHERE id = %s;", (session_id,))
+                h_row = cur.fetchone()
+                if h_row and h_row[0]:
+                    parsed_hist = parse_json_field(h_row[0], [])
+                    hist_counts = {}
+                    hist_info = {}
+                    for item in parsed_hist:
+                        v_id = item.get("videoId")
+                        if v_id:
+                            hist_counts[v_id] = hist_counts.get(v_id, 0) + 1
+                            if v_id not in hist_info:
+                                hist_info[v_id] = item
+                    
+                    for v_id, count in hist_counts.items():
+                        if count >= 2:
+                            if v_id in favorites_dict:
+                                favorites_dict[v_id]["totalCount"] = max(favorites_dict[v_id]["totalCount"], count)
+                            else:
+                                item = hist_info[v_id]
+                                favorites_dict[v_id] = {
+                                    "videoId": v_id,
+                                    "title": item.get("title", "Canción"),
+                                    "artist": item.get("artist", "Desconocido"),
+                                    "requestCount": 0,
+                                    "likeCount": 0,
+                                    "totalCount": count,
+                                    "lastPlayedAt": None
+                                }
+            except Exception as h_err:
+                print(f"Error analizando historial de sesión para repeticiones: {h_err}")
+
+            favorites = list(favorites_dict.values())
+            favorites.sort(key=lambda x: x["totalCount"], reverse=True)
+            favorites = favorites[:limit]
+        else:
+            cur.execute("""
+                SELECT video_id, title, artist, request_count, like_count, total_count, last_played_at
+                FROM song_favorites_repeats
+                WHERE total_count >= 1
+                ORDER BY total_count DESC, last_played_at DESC
+                LIMIT %s;
+            """, (limit,))
+            rows = cur.fetchall()
+            favorites = [{
+                "videoId": r[0],
+                "title": r[1],
+                "artist": r[2],
+                "requestCount": r[3],
+                "likeCount": r[4],
+                "totalCount": r[5],
+                "lastPlayedAt": r[6].isoformat() if r[6] else None
+            } for r in rows]
+
         cur.close()
         conn.close()
-        favorites = [{
-            "videoId": r[0],
-            "title": r[1],
-            "artist": r[2],
-            "requestCount": r[3],
-            "likeCount": r[4],
-            "totalCount": r[5],
-            "lastPlayedAt": r[6].isoformat() if r[6] else None
-        } for r in rows]
-        return {"favorites": favorites}
+        return {"favorites": favorites, "scope": scope, "session_id": session_id}
     except Exception as e:
         print(f"Error obteniendo favoritos: {e}")
         if conn:
             conn.close()
-        return {"favorites": []}
+        return {"favorites": [], "scope": scope}
 
 @app.get("/favorites/count/{video_id}")
-def get_favorite_count(video_id: str):
+def get_favorite_count(video_id: str, session_id: Optional[str] = Query(None)):
     conn = get_db_connection()
     if not conn:
-        return {"totalCount": 0, "requestCount": 0, "likeCount": 0}
+        return {"totalCount": 0, "requestCount": 0, "likeCount": 0, "sessionCount": 0}
     try:
         cur = conn.cursor()
         cur.execute("SELECT total_count, request_count, like_count FROM song_favorites_repeats WHERE video_id = %s;", (video_id,))
         row = cur.fetchone()
+        global_total = row[0] if row else 0
+        global_req = row[1] if row else 0
+        global_like = row[2] if row else 0
+
+        session_total = 0
+        session_req = 0
+        session_like = 0
+        if session_id:
+            cur.execute("""
+                SELECT total_count, request_count, like_count 
+                FROM session_song_repeats 
+                WHERE session_id = %s AND video_id = %s;
+            """, (session_id, video_id))
+            s_row = cur.fetchone()
+            if s_row:
+                session_total = s_row[0]
+                session_req = s_row[1]
+                session_like = s_row[2]
+            
+            # Revisar si se repitió en el historial de esta sesión
+            try:
+                cur.execute("SELECT history FROM radio_sessions WHERE id = %s;", (session_id,))
+                h_row = cur.fetchone()
+                if h_row and h_row[0]:
+                    parsed_hist = parse_json_field(h_row[0], [])
+                    h_count = sum(1 for item in parsed_hist if item.get("videoId") == video_id)
+                    session_total = max(session_total, h_count)
+            except Exception:
+                pass
+
         cur.close()
         conn.close()
-        if row:
-            return {"totalCount": row[0], "requestCount": row[1], "likeCount": row[2]}
-        return {"totalCount": 0, "requestCount": 0, "likeCount": 0}
+        return {
+            "totalCount": global_total,
+            "requestCount": global_req,
+            "likeCount": global_like,
+            "sessionCount": session_total,
+            "sessionRequestCount": session_req,
+            "sessionLikeCount": session_like
+        }
     except Exception as e:
         if conn:
             conn.close()
-        return {"totalCount": 0, "requestCount": 0, "likeCount": 0}
+        return {"totalCount": 0, "requestCount": 0, "likeCount": 0, "sessionCount": 0}
 
 @app.get("/history")
 def get_history_list(limit: int = 20):

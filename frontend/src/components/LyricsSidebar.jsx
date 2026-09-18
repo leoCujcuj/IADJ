@@ -18,9 +18,51 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
   const listRef = useRef(null);
   const activeLineRef = useRef(null);
 
+  const triggerTranslation = (songVideoId, linesToTranslate, isKaraoke) => {
+    if (!songVideoId || isTranslating || linesToTranslate.length === 0) return;
+    setIsTranslating(true);
+    fetch(`http://127.0.0.1:3001/api/lyrics/${songVideoId}/translate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lines: linesToTranslate })
+    })
+      .then(r => r.json())
+      .then(transData => {
+        if (!Array.isArray(transData.translations) || transData.translations.length === 0) return;
+        if (isKaraoke) {
+          setSyncedLines(prev =>
+            prev.map((item, idx) => ({
+              ...item,
+              translation: transData.translations[idx] || item.translation
+            }))
+          );
+        } else {
+          let tIdx = 0;
+          setPlainLines(prev =>
+            prev.map(item => {
+              if (!item.text?.trim()) return item;
+              const trans = transData.translations[tIdx] || null;
+              tIdx++;
+              return { ...item, translation: trans || item.translation };
+            })
+          );
+        }
+      })
+      .catch(err => console.warn('Error en traducción secundaria:', err))
+      .finally(() => setIsTranslating(false));
+  };
+
   const handleModeChange = (mode) => {
     setDisplayMode(mode);
     localStorage.setItem('lyrics_display_mode', mode);
+    if ((mode === 'bilingual' || mode === 'translation') && !hasTranslations && !isTranslating && currentSong?.videoId) {
+      if (isSynced && syncedLines.length > 0) {
+        triggerTranslation(currentSong.videoId, syncedLines.map(l => l.text), true);
+      } else if (plainLines.length > 0) {
+        const nonEmpties = plainLines.filter(l => l.text?.trim()).map(l => l.text);
+        triggerTranslation(currentSong.videoId, nonEmpties, false);
+      }
+    }
   };
 
   // Carga ultra-rápida (<200ms) de letras al abrir o al cambiar de canción
@@ -52,26 +94,7 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
 
           // Si no tiene traducción aún, pedirla en segundo plano sin bloquear el karaoke
           if (!data.hasTranslation) {
-            setIsTranslating(true);
-            fetch(`http://127.0.0.1:3001/api/lyrics/${currentSong.videoId}/translate`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ lines: data.lines.map(l => l.text) })
-            })
-              .then(r => r.json())
-              .then(transData => {
-                if (!isMounted || !Array.isArray(transData.translations)) return;
-                setSyncedLines(prev =>
-                  prev.map((item, idx) => ({
-                    ...item,
-                    translation: transData.translations[idx] || item.translation
-                  }))
-                );
-              })
-              .catch(err => console.warn('Error en traducción secundaria:', err))
-              .finally(() => {
-                if (isMounted) setIsTranslating(false);
-              });
+            triggerTranslation(currentSong.videoId, data.lines.map(l => l.text), true);
           }
         } else if (Array.isArray(data.plainLines) && data.plainLines.length > 0) {
           setPlainLines(data.plainLines);
@@ -81,29 +104,7 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
           if (!data.hasTranslation) {
             const nonEmpties = data.plainLines.filter(l => l.text?.trim()).map(l => l.text);
             if (nonEmpties.length > 0) {
-              setIsTranslating(true);
-              fetch(`http://127.0.0.1:3001/api/lyrics/${currentSong.videoId}/translate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ lines: nonEmpties })
-              })
-                .then(r => r.json())
-                .then(transData => {
-                  if (!isMounted || !Array.isArray(transData.translations)) return;
-                  let tIdx = 0;
-                  setPlainLines(prev =>
-                    prev.map(item => {
-                      if (!item.text?.trim()) return item;
-                      const trans = transData.translations[tIdx] || null;
-                      tIdx++;
-                      return { ...item, translation: trans };
-                    })
-                  );
-                })
-                .catch(err => console.warn('Error en traducción secundaria:', err))
-                .finally(() => {
-                  if (isMounted) setIsTranslating(false);
-                });
+              triggerTranslation(currentSong.videoId, nonEmpties, false);
             }
           }
         } else {
@@ -193,35 +194,47 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
         </button>
       </div>
 
-      {/* Selector de idioma / traducción */}
-      {(hasTranslations || isTranslating) && !loading && (
+      {/* Selector de idioma / traducción permanente */}
+      {(syncedLines.length > 0 || plainLines.length > 0) && (
         <div className="lyrics-lang-bar">
           <div className="lang-bar-label">
             <Languages size={14} />
-            <span>{isTranslating ? 'Traduciendo al español...' : 'Traducción:'}</span>
+            <span>{isTranslating ? 'Traduciendo...' : 'Modo:'}</span>
             {isTranslating && <Loader2 size={12} className="spinner" />}
           </div>
           <div className="lang-pill-selector">
             <button
+              type="button"
               className={`lang-pill ${displayMode === 'bilingual' ? 'active' : ''}`}
-              onClick={() => handleModeChange('bilingual')}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleModeChange('bilingual');
+              }}
               title="Mostrar texto original y traducción al español debajo"
             >
               Bilingüe
             </button>
             <button
+              type="button"
               className={`lang-pill ${displayMode === 'translation' ? 'active' : ''}`}
-              onClick={() => handleModeChange('translation')}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleModeChange('translation');
+              }}
               title="Mostrar solo la letra en español"
             >
               Español
             </button>
             <button
+              type="button"
               className={`lang-pill ${displayMode === 'original' ? 'active' : ''}`}
-              onClick={() => handleModeChange('original')}
-              title="Mostrar solo el idioma original"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleModeChange('original');
+              }}
+              title="Mostrar solo el idioma original (inglés)"
             >
-              Original
+              Original (Inglés)
             </button>
           </div>
         </div>
