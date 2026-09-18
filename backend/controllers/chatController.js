@@ -245,15 +245,19 @@ async function handleChat(req, res) {
 
     const prompt = `MODO: ${isLogged ? 'LOGUEADO' : 'INVITADO'}.
 Contexto temporal: ${timeContext}.
-Estilo de locutor: ${personality}.
+Estilo de locución al hablar: ${personality} (ATENCIÓN: Tu estilo de locutor SOLO define el tono de tu voz al hablar, NUNCA altera la música ni el género a reproducir).
 Usuario dice: "${message}".
 ${modeInstruction}
 Sonando ahora: ${currentSong ? `${currentSong.title} - ${currentSong.artist}` : 'Nada'}.
 Historial reciente: ${historyContext}.
 REGLAS OBLIGATORIAS:
 1. TIEMPO EXACTO: Si saludas o haces referencia al momento del día, básate ESTRICTAMENTE en "${timeContext}". Si el periodo es Tarde o Mediodía, JAMÁS digas 'en esta noche' ni 'buenas noches'.
-2. Sé musicalmente coherente. Si el usuario menciona múltiples artistas o un estilo, elige una canción representativa del mismo género. Tu locución debe nombrar ÚNICAMENTE al artista que pongas en "busqueda".
-3. PETICIÓN DIRECTA: Si el usuario pide poner una canción (ej: "pon...", "reproduce...", "toca..."), pon SIEMPRE cambiar_cancion: true y busca la canción solicitada. JAMÁS digas 'ya la tienes puesta' ni rechaces ponerla, aunque sea la misma que suena ahora (el usuario puede estar pidiendo reiniciarla o desatascarla).`;
+2. RECOMENDACIONES Y SUGERENCIAS ("recomiéndame algo", "sorpréndeme", "pon algo bueno", etc.):
+   - Revisa SIEMPRE los artistas y canciones de 'Historial reciente' y 'Sonando ahora'.
+   - Recomienda una canción o artista similar y afín a lo que el oyente ya escucha en la sesión.
+   - Tu nivel de energía o personalidad (${personality}) NUNCA debe desviar el estilo musical ni imponer géneros ajenos al gusto demostrado por el oyente. La energía solo modula tus palabras.
+3. COHERENCIA MUSICAL: Si el usuario menciona múltiples artistas o un estilo, elige una canción representativa del mismo género. Tu locución debe nombrar ÚNICAMENTE al artista que pongas en "busqueda".
+4. PETICIÓN DIRECTA: Si el usuario pide poner una canción (ej: "pon...", "reproduce...", "toca..."), pon SIEMPRE cambiar_cancion: true y busca la canción solicitada. JAMÁS digas 'ya la tienes puesta' ni rechaces ponerla, aunque sea la misma que suena ahora (el usuario puede estar pidiendo reiniciarla o desatascarla).`;
 
     let djDecision = await getDJDecision(prompt);
     

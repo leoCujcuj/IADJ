@@ -64,12 +64,12 @@ export default function SettingsModal({
               <Sparkles size={18} />
               <span>Personalidad del Locutor</span>
             </label>
-            <p className="settings-desc">El tono y vibra de sus intervenciones:</p>
+            <p className="settings-desc">El tono y estilo al hablar (no altera tu música ni tus géneros):</p>
             <div className="personality-options">
               {[
-                { id: 'chill', name: 'Chill / Nocturno', desc: 'Voz suave, pausada, íntima. Ideal para Neo-Soul, Lo-Fi y R&B.' },
-                { id: 'energetic', name: 'Enérgico / Club', desc: 'Ritmo alto, festivo, animado y con mucha chispa.' },
-                { id: 'curator', name: 'Melómano / Crítico', desc: 'Detalles de producción, datos curiosos e instrumentos.' }
+                { id: 'chill', name: 'Chill / Relajado', desc: 'Voz suave, pausada y cercana al presentar las canciones.' },
+                { id: 'energetic', name: 'Enérgico / Festivo', desc: 'Locución con ritmo alto, animada y con mucha chispa.' },
+                { id: 'curator', name: 'Melómano / Curador', desc: 'Comentarios con datos curiosos, producción y anécdotas.' }
               ].map((p) => (
                 <div
                   key={p.id}
