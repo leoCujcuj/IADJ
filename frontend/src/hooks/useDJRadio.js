@@ -1540,6 +1540,11 @@ export default function useDJRadio() {
         
         setCurrentSong(s.current_song || null);
         currentSongRef.current = s.current_song || null;
+        if (s.current_song?.videoId && playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
+          playerRef.current.loadVideoById(s.current_song.videoId);
+        } else if (!s.current_song?.videoId && playerRef.current && typeof playerRef.current.stopVideo === 'function') {
+          playerRef.current.stopVideo();
+        }
         setQueue(Array.isArray(s.queue) ? s.queue : []);
         setHistory(Array.isArray(s.history) ? s.history : []);
         setChatHistory(Array.isArray(s.chat_history) && s.chat_history.length > 0 ? s.chat_history : [

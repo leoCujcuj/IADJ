@@ -1286,6 +1286,7 @@ def save_session(payload: SessionSavePayload):
             json.dumps(payload.chat_history),
             json.dumps(payload.settings)
         ))
+        cur.execute("UPDATE radio_sessions SET is_active = FALSE WHERE id != %s;", (payload.id,))
         conn.commit()
         cur.close()
         conn.close()

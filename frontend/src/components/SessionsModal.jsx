@@ -9,7 +9,8 @@ import {
   Check, 
   Disc3, 
   Headphones,
-  Sparkles
+  Sparkles,
+  Play
 } from 'lucide-react';
 
 export default function SessionsModal({
@@ -152,19 +153,20 @@ export default function SessionsModal({
               </div>
             ) : (
               sessions.map((sess) => {
-                const isActive = sess.id === activeSessionId || sess.is_active;
+                const isActive = sess.id === activeSessionId;
                 const isEditing = editingId === sess.id;
                 const currentSong = sess.current_song;
 
                 return (
                   <div
                     key={sess.id}
-                    className={`session-card-item ${isActive ? 'active' : ''}`}
+                    className={`session-card-item ${isActive ? 'active' : 'inactive'}`}
                     onClick={() => {
                       if (!isEditing && !isActive) {
                         onSwitchSession(sess.id);
                       }
                     }}
+                    title={isActive ? 'Estación activa al aire' : `Haz clic para sintonizar "${sess.name}"`}
                   >
                     <div className="session-card-left">
                       <div className={`session-card-avatar ${isActive ? 'active' : ''}`}>
@@ -201,7 +203,22 @@ export default function SessionsModal({
                           ) : (
                             <div className="session-card-title-group">
                               <h4 className="session-card-title">{sess.name}</h4>
-                              {isActive && <span className="active-badge">Al Aire</span>}
+                              {isActive ? (
+                                <span className="active-badge">Al Aire</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="btn-tune-station"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onSwitchSession(sess.id);
+                                  }}
+                                  title={`Sintonizar emisora "${sess.name}"`}
+                                >
+                                  <Play size={11} fill="currentColor" />
+                                  <span>Sintonizar</span>
+                                </button>
+                              )}
                             </div>
                           )}
 

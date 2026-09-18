@@ -1842,6 +1842,34 @@ input:checked + .slider:before {
   flex-shrink: 0;
 }
 
+.btn-tune-station {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(168, 85, 247, 0.15);
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  color: #c084fc;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2rem 0.6rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.btn-tune-station:hover {
+  background: #a855f7;
+  border-color: #a855f7;
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.4);
+}
+
+.session-card-item:not(.active):hover {
+  border-color: #a855f7;
+  background: rgba(168, 85, 247, 0.05);
+}
+
 .session-card-time {
   font-size: 0.72rem;
   color: var(--text-dim);
