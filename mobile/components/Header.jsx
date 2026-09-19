@@ -1,12 +1,12 @@
 import React from 'react';
 import { StyleSheet, Text, View, TouchableOpacity } from 'react-native';
-import { Settings, Radio } from 'lucide-react-native';
+import { Settings } from 'lucide-react-native';
 
 export default function Header({ onSettingsPress }) {
   return (
     <View style={styles.header}>
       <View style={styles.headerTitleContainer}>
-        <Radio color="#8B5CF6" size={22} style={styles.headerIcon} />
+        <Text style={styles.headerLogo}>📻</Text>
         <Text style={styles.headerText}>Gemini Radio AI</Text>
       </View>
       <TouchableOpacity style={styles.iconButton} onPress={onSettingsPress}>
@@ -31,7 +31,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  headerIcon: {
+  headerLogo: {
+    fontSize: 24,
     marginRight: 8,
   },
   headerText: {

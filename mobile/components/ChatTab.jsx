@@ -34,7 +34,7 @@ export default function ChatTab({
               msg.sender === 'dj' ? styles.djBubble : styles.userBubble
             ]}
           >
-            <Text style={styles.bubbleAuthor}>{msg.sender === 'dj' ? 'DJ Gemini' : 'Tú'}</Text>
+            <Text style={styles.bubbleAuthor}>{msg.sender === 'dj' ? '🎙️ DJ Gemini' : '👤 Tú'}</Text>
             <Text style={styles.bubbleText}>{msg.text}</Text>
           </View>
         ))}
