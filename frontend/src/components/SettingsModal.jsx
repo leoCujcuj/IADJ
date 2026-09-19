@@ -1,5 +1,64 @@
 import React from 'react';
-import { X, Volume2, Volume1, Sparkles, Clock, Sliders, Database, RotateCcw, PauseCircle } from 'lucide-react';
+import { X, Volume2, Volume1, Sparkles, Clock, Sliders, Database, RotateCcw, PauseCircle, Mic, Play, Square } from 'lucide-react';
+
+export const AVAILABLE_VOICES = [
+  {
+    id: 'IKne3meq5aSn9XLyUdCD',
+    name: 'Charlie',
+    gender: 'Masculino',
+    style: 'Enérgico y seguro',
+    sampleText: 'Hola, soy Charlie, tu locutor de radio. ¿Listo para empezar?'
+  },
+  {
+    id: 'bIHbv24MWmeRgasZH58o',
+    name: 'Will',
+    gender: 'Masculino',
+    style: 'Chill y relajado',
+    sampleText: 'Qué tal, soy Will. Todo relajado por aquí, ¿listo para empezar?'
+  },
+  {
+    id: 'CwhRBWXzGAHq8TQ4Fs17',
+    name: 'Roger',
+    gender: 'Masculino',
+    style: 'Grave y elegante',
+    sampleText: 'Saludos, soy Roger. Buenas vibras en la cabina, ¿listo para empezar?'
+  },
+  {
+    id: 'cjVigY5qzO86Huf0OWal',
+    name: 'Eric',
+    gender: 'Masculino',
+    style: 'Clásico y suave',
+    sampleText: 'Hola, soy Eric. La mejor música para ti, ¿listo para empezar?'
+  },
+  {
+    id: 'nPczCjzI2devNBz1zQrb',
+    name: 'Brian',
+    gender: 'Masculino',
+    style: 'Profundo y sobrio',
+    sampleText: 'Hola, te habla Brian. Bienvenido a la radio, ¿listo para empezar?'
+  },
+  {
+    id: 'cgSgspJ2msm6clMCkdW9',
+    name: 'Jessica',
+    gender: 'Femenino',
+    style: 'Cálida y alegre',
+    sampleText: 'Hola, soy Jessica. Qué gusto acompañarte hoy, ¿listo para empezar?'
+  },
+  {
+    id: 'EXAVITQu4vr4xnSDxMaL',
+    name: 'Sarah',
+    gender: 'Femenino',
+    style: 'Profesional y clara',
+    sampleText: 'Hola, soy Sarah. Excelente selección para hoy, ¿listo para empezar?'
+  },
+  {
+    id: 'FGY2WhTYpPnrIDTdsKH5',
+    name: 'Laura',
+    gender: 'Femenino',
+    style: 'Entusiasta y vivaz',
+    sampleText: 'Hola, soy Laura. Mucha energía en la música hoy, ¿listo para empezar?'
+  }
+];
 
 export default function SettingsModal({
   isOpen,
@@ -8,6 +67,10 @@ export default function SettingsModal({
   setFrequency,
   personality,
   setPersonality,
+  selectedVoice = 'IKne3meq5aSn9XLyUdCD',
+  setSelectedVoice,
+  onPlayVoicePreview,
+  playingPreviewVoiceId,
   crossfade,
   setCrossfade,
   autoPauseOnTabChange,
@@ -85,6 +148,67 @@ export default function SettingsModal({
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Voz del Locutor */}
+          <div className="settings-group">
+            <label className="settings-label">
+              <Mic size={18} />
+              <span>Voz del Locutor</span>
+            </label>
+            <p className="settings-desc">Elige la voz del locutor y escucha una previa antes de seleccionarla:</p>
+            <div className="voice-options-grid">
+              {AVAILABLE_VOICES.map((v) => {
+                const isSelected = selectedVoice === v.id;
+                const isPlaying = playingPreviewVoiceId === v.id;
+                return (
+                  <div
+                    key={v.id}
+                    className={`voice-card ${isSelected ? 'active' : ''}`}
+                    onClick={() => setSelectedVoice && setSelectedVoice(v.id)}
+                  >
+                    <div className="voice-card-main">
+                      <div className="personality-radio">
+                        <span className={`radio-dot ${isSelected ? 'selected' : ''}`} />
+                      </div>
+                      <div className="voice-info">
+                        <div className="voice-header-line">
+                          <h4 className="voice-name">{v.name}</h4>
+                          <span className={`voice-gender-badge ${v.gender === 'Femenino' ? 'female' : 'male'}`}>
+                            {v.gender}
+                          </span>
+                        </div>
+                        <p className="voice-style">{v.style}</p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className={`voice-preview-btn ${isPlaying ? 'playing' : ''}`}
+                      title={isPlaying ? "Detener muestra" : `Escuchar muestra de ${v.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (onPlayVoicePreview) {
+                          onPlayVoicePreview(v.id, v.sampleText);
+                        }
+                      }}
+                    >
+                      {isPlaying ? (
+                        <>
+                          <Square size={13} fill="currentColor" />
+                          <span>Detener</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play size={13} fill="currentColor" />
+                          <span>Probar</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
 

@@ -9,6 +9,7 @@ import LyricsSidebar from './components/LyricsSidebar';
 import TriviaModal from './components/TriviaModal';
 import SessionsModal from './components/SessionsModal';
 import FavoritesModal from './components/FavoritesModal';
+import TasteProfileModal from './components/TasteProfileModal';
 import ConfirmModal from './components/common/ConfirmModal';
 import useDJRadio from './hooks/useDJRadio';
 
@@ -89,7 +90,16 @@ function App() {
     sessionFavoritesList,
     globalFavoritesList,
     loadingFavorites,
-    fetchFavorites
+    fetchFavorites,
+    tasteProfile,
+    isTasteModalOpen,
+    setIsTasteModalOpen,
+    loadingTasteProfile,
+    saveTasteProfile,
+    selectedVoice,
+    setSelectedVoice,
+    playingPreviewVoiceId,
+    handlePlayVoicePreview
   } = useDJRadio();
 
   return (
@@ -104,6 +114,7 @@ function App() {
           fetchFavorites();
           setIsFavoritesOpen(true);
         }}
+        onOpenTasteProfile={() => setIsTasteModalOpen(true)}
       />
 
       <main className="main-content">
@@ -179,6 +190,10 @@ function App() {
         setFrequency={setFrequency}
         personality={personality}
         setPersonality={setPersonality}
+        selectedVoice={selectedVoice}
+        setSelectedVoice={setSelectedVoice}
+        playingPreviewVoiceId={playingPreviewVoiceId}
+        onPlayVoicePreview={handlePlayVoicePreview}
         crossfade={crossfade}
         setCrossfade={setCrossfade}
         autoPauseOnTabChange={autoPauseOnTabChange}
@@ -214,6 +229,14 @@ function App() {
         onPlaySong={(song) => {
           handleSendMessage(null, `Pon la canción ${song.title} de ${song.artist}`);
         }}
+      />
+
+      <TasteProfileModal
+        isOpen={isTasteModalOpen}
+        onClose={() => setIsTasteModalOpen(false)}
+        tasteProfile={tasteProfile}
+        onSaveTasteProfile={saveTasteProfile}
+        loading={loadingTasteProfile}
       />
 
       {modalDialog && (

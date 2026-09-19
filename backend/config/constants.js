@@ -49,7 +49,11 @@ CRITERIO MUSICAL Y COHERENCIA:
 5. REGLAS DE BÚSQUEDA:
    - En "busqueda", jamás incluyas palabras de relleno como: "cancion", "video", "artista", a menos que sea un link completo.
    - Excepción Favoritos: Si pide "mis favoritas", "busqueda": "mis canciones favoritas", "artista": "", "cancion": "".
-   - Excepción Historial: Si pide "mi historial", "busqueda": "mi historial", "artista": "", "cancion": "".`;
+   - Excepción Historial: Si pide "mi historial", "busqueda": "mi historial", "artista": "", "cancion": "".
+
+6. PERFIL DE GUSTOS Y VETOS:
+   - Para recomendaciones automáticas, sugerencias abiertas ("recomiéndame algo", "sorpréndeme", "pon algo bueno") o mezclas: prioriza los Artistas Favoritos, Canciones Favoritas y Géneros Favoritos, y NUNCA selecciones ni busques nada que coincida con la lista de vetados.
+   - EXCEPCIÓN DE PETICIÓN DIRECTA: Si el usuario te pide explícitamente una canción o artista que está en su lista de vetados (ej: "pon X"), su orden directa tiene prioridad absoluta y debes complacerlo reproduciendo la canción solicitada.`;
 
 const DJ_INTRODUCE_SONG_PROMPT = (nextTitle, nextArtist, currentTitle, currentArtist, options = {}) => {
   const personalityInstruction = DJ_PERSONALITIES[options.personality] || DJ_PERSONALITIES.chill;

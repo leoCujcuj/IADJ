@@ -154,7 +154,7 @@ function isPureArtistRequest(text, detectedArtist) {
 }
 
 async function handleChat(req, res) {
-  const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone, session_id } = req.body;
+  const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone, session_id, taste_profile, voice_id } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
   const timeContext = getTimeContext(timeZone);
   
@@ -175,6 +175,42 @@ async function handleChat(req, res) {
     const historyContext = musicHistory.length > 0 
       ? musicHistory.map(h => `${h.title} - ${h.artists?.[0]?.name || h.artist}`).join(', ')
       : "No hay historial";
+
+    let userTaste = taste_profile;
+    if (!userTaste) {
+      try {
+        const tasteRes = await axios.get(`${PYTHON_SERVICE_URL}/profile/taste`);
+        userTaste = tasteRes.data;
+      } catch (tErr) {
+        // Ignorable si el servicio aún no responde
+      }
+    }
+
+    let tasteContext = '';
+    if (userTaste) {
+      const favArtists = Array.isArray(userTaste.favorite_artists) && userTaste.favorite_artists.length > 0
+        ? userTaste.favorite_artists.join(', ') : 'Ninguno especificado';
+      const favSongs = Array.isArray(userTaste.favorite_songs) && userTaste.favorite_songs.length > 0
+        ? userTaste.favorite_songs.map(s => typeof s === 'object' ? `${s.title}${s.artist ? ' (' + s.artist + ')' : ''}` : s).join(', ') : 'Ninguna especificada';
+      const favGenres = Array.isArray(userTaste.favorite_genres) && userTaste.favorite_genres.length > 0
+        ? userTaste.favorite_genres.join(', ') : 'Ninguno especificado';
+      
+      const disArtists = Array.isArray(userTaste.disliked_artists) && userTaste.disliked_artists.length > 0
+        ? userTaste.disliked_artists.join(', ') : 'Ninguno';
+      const disSongs = Array.isArray(userTaste.disliked_songs) && userTaste.disliked_songs.length > 0
+        ? userTaste.disliked_songs.map(s => typeof s === 'object' ? `${s.title}${s.artist ? ' (' + s.artist + ')' : ''}` : s).join(', ') : 'Ninguna';
+      const disGenres = Array.isArray(userTaste.disliked_genres) && userTaste.disliked_genres.length > 0
+        ? userTaste.disliked_genres.join(', ') : 'Ninguno';
+
+      tasteContext = `
+PERFIL DE GUSTOS Y RESTRICCIONES DEL USUARIO:
+- Artistas Favoritos: ${favArtists}
+- Canciones Favoritas: ${favSongs}
+- Géneros Favoritos: ${favGenres}
+- Artistas Vetados/Prohibidos (JAMÁS poner ni sugerir): ${disArtists}
+- Canciones Vetadas/Prohibidas (JAMÁS poner estas canciones específicas; si el artista está permitido, solo se prohíbe esta canción individual): ${disSongs}
+- Géneros Vetados/Prohibidos (JAMÁS poner ni sugerir): ${disGenres}`;
+    }
 
     let nextSong = null;
     let djComment = null;
@@ -225,7 +261,7 @@ async function handleChat(req, res) {
         djComment = djDecision?.locucion || (isDislike
           ? `¡Sin problema! Dejamos esa atrás y seguimos con ${nextSong.title} de ${songArtist}.`
           : `¡Seguimos con ${songArtist} y su tema ${nextSong.title}!`);
-        audioUrl = await generateTTS(djComment);
+        audioUrl = await generateTTS(djComment, voice_id);
       }
 
       return res.json({ dj_comment: djComment, audioUrl, nextSong });
@@ -249,15 +285,17 @@ Estilo de locución al hablar: ${personality} (ATENCIÓN: Tu estilo de locutor S
 Usuario dice: "${message}".
 ${modeInstruction}
 Sonando ahora: ${currentSong ? `${currentSong.title} - ${currentSong.artist}` : 'Nada'}.
-Historial reciente: ${historyContext}.
+Historial reciente: ${historyContext}.${tasteContext}
 REGLAS OBLIGATORIAS:
 1. TIEMPO EXACTO: Si saludas o haces referencia al momento del día, básate ESTRICTAMENTE en "${timeContext}". Si el periodo es Tarde o Mediodía, JAMÁS digas 'en esta noche' ni 'buenas noches'.
 2. RECOMENDACIONES Y SUGERENCIAS ("recomiéndame algo", "sorpréndeme", "pon algo bueno", etc.):
-   - Revisa SIEMPRE los artistas y canciones de 'Historial reciente' y 'Sonando ahora'.
-   - Recomienda una canción o artista similar y afín a lo que el oyente ya escucha en la sesión.
+   - Prioriza basarte en los Artistas Favoritos, Canciones Favoritas y Géneros Favoritos del perfil de gustos del usuario, o en temas afines al historial reciente.
    - Tu nivel de energía o personalidad (${personality}) NUNCA debe desviar el estilo musical ni imponer géneros ajenos al gusto demostrado por el oyente. La energía solo modula tus palabras.
 3. COHERENCIA MUSICAL: Si el usuario menciona múltiples artistas o un estilo, elige una canción representativa del mismo género. Tu locución debe nombrar ÚNICAMENTE al artista que pongas en "busqueda".
-4. PETICIÓN DIRECTA: Si el usuario pide poner una canción (ej: "pon...", "reproduce...", "toca..."), pon SIEMPRE cambiar_cancion: true y busca la canción solicitada. JAMÁS digas 'ya la tienes puesta' ni rechaces ponerla, aunque sea la misma que suena ahora (el usuario puede estar pidiendo reiniciarla o desatascarla).`;
+4. PETICIÓN DIRECTA: Si el usuario pide poner una canción (ej: "pon...", "reproduce...", "toca..."), pon SIEMPRE cambiar_cancion: true y busca la canción solicitada. Su orden directa tiene prioridad absoluta sobre la lista de vetados.
+5. RESTRICCIONES Y VETOS ESTRICTOS:
+   - Para recomendaciones, sugerencias abiertas ("recomiéndame algo", "sorpréndeme") o cuando tú elijas la música, JAMÁS elijas, busques ni sugieras artistas, canciones o géneros que figuren como Vetados/Prohibidos en el perfil de gustos.
+   - EXCEPCIÓN DE PETICIÓN DIRECTA: Si el usuario te pide explícitamente una canción o artista que está en su lista de vetados, complácelo y búscala de inmediato. En tu locución puedes mencionar brevemente y con frescura que aunque la tenía en su lista negra, sus órdenes mandan en la cabina.`;
 
     let djDecision = await getDJDecision(prompt);
     
@@ -359,7 +397,7 @@ REGLAS OBLIGATORIAS:
         try {
           console.log(`[CHAT SEARCH]: Buscando en YouTube Music: query="${searchQuery}" (tipo=${finalType})`);
           const searchRes = await axios.get(`${PYTHON_SERVICE_URL}/search`, { 
-            params: { q: searchQuery, type: finalType } 
+            params: { q: searchQuery, type: finalType, force: true } 
           });
           nextSong = searchRes.data;
         } catch (err) {
@@ -381,7 +419,7 @@ REGLAS OBLIGATORIAS:
         }
 
         // Generar locución de voz después de confirmar la canción real
-        audioUrl = await generateTTS(djComment);
+        audioUrl = await generateTTS(djComment, voice_id);
 
         // Precargar letras de inmediato para que la primera canción también tenga traducción lista
         preloadSongLyrics(nextSong.videoId, nextSong.title, nextSong.artist).catch(() => {});
@@ -401,11 +439,11 @@ REGLAS OBLIGATORIAS:
           nextSong.globalRepeatCount = 1;
         }
       } else {
-        audioUrl = await generateTTS(djComment);
+        audioUrl = await generateTTS(djComment, voice_id);
       }
     } else {
       nextSong = null;
-      audioUrl = await generateTTS(djComment);
+      audioUrl = await generateTTS(djComment, voice_id);
     }
 
     res.json({ 
@@ -422,7 +460,7 @@ REGLAS OBLIGATORIAS:
 
 // Endpoint para precargar la siguiente canción a los últimos 30 segundos
 async function handlePreload(req, res) {
-  const { currentSong, personality = 'chill', frequency = 5, timeZone } = req.body;
+  const { currentSong, personality = 'chill', frequency = 5, timeZone, voice_id } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
   const timeContext = getTimeContext(timeZone);
 
@@ -461,7 +499,7 @@ async function handlePreload(req, res) {
       );
       const djDecision = await getDJDecision("Presenta el siguiente tema que cerrará el bloque", introPrompt);
       djComment = djDecision?.locucion || `¡A continuación, ${songArtist} con ${candidate.title}!`;
-      audioUrl = await generateTTS(djComment);
+      audioUrl = await generateTTS(djComment, voice_id);
       console.log(`[PRELOAD CON VOZ Y TRIVIA]: "${candidate.title}" - ${songArtist}`);
     } else {
       console.log(`[PRELOAD SILENCIOSO - AHORRANDO ELEVENLABS]: "${candidate.title}" (${songsSinceLastDJIntervention + 1}/${targetFrequency || 'Solo Chat'})`);
@@ -994,6 +1032,43 @@ async function handleRecordHistory(req, res) {
   }
 }
 
+async function handleGetTasteProfile(req, res) {
+  try {
+    const response = await axios.get(`${PYTHON_SERVICE_URL}/profile/taste`);
+    return res.json(response.data);
+  } catch (error) {
+    console.error("Error al obtener perfil musical:", error.message);
+    return res.status(500).json({ error: "Error al obtener perfil musical" });
+  }
+}
+
+async function handleSaveTasteProfile(req, res) {
+  try {
+    const response = await axios.post(`${PYTHON_SERVICE_URL}/profile/taste`, req.body);
+    return res.json(response.data);
+  } catch (error) {
+    console.error("Error al guardar perfil musical:", error.message);
+    return res.status(500).json({ error: "Error al guardar perfil musical" });
+  }
+}
+
+async function handleVoicePreview(req, res) {
+  try {
+    const { voice_id, text } = req.body;
+    if (!voice_id || !text) {
+      return res.status(400).json({ error: "voice_id y text son requeridos" });
+    }
+    const audioUrl = await generateTTS(text, voice_id);
+    if (!audioUrl) {
+      return res.status(500).json({ error: "No se pudo generar la muestra de voz" });
+    }
+    return res.json({ audioUrl });
+  } catch (error) {
+    console.error("Error en handleVoicePreview:", error.message);
+    return res.status(500).json({ error: error.message });
+  }
+}
+
 module.exports = {
   handleChat,
   handlePreload,
@@ -1013,5 +1088,8 @@ module.exports = {
   handleFallbackVideo,
   handleGetFavorites,
   handleGetFavoriteCount,
-  handleRecordHistory
+  handleRecordHistory,
+  handleGetTasteProfile,
+  handleSaveTasteProfile,
+  handleVoicePreview
 };

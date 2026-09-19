@@ -1,4 +1,5 @@
 import psycopg2
+from psycopg2 import pool
 import os
 import time
 from dotenv import load_dotenv
@@ -13,13 +14,49 @@ DB_CONFIG = {
     "port": os.getenv("DB_PORT", "5432")
 }
 
+db_pool = None
+
+def get_db_pool():
+    global db_pool
+    if db_pool is None or db_pool.closed:
+        try:
+            db_pool = pool.ThreadedConnectionPool(
+                minconn=2,
+                maxconn=10,
+                **DB_CONFIG
+            )
+        except Exception as e:
+            print(f"No se pudo inicializar ThreadedConnectionPool: {e}")
+            db_pool = None
+    return db_pool
+
 def get_db_connection():
+    p = get_db_pool()
+    if p:
+        try:
+            return p.getconn()
+        except Exception as e:
+            print(f"Error obteniendo conexion del pool: {e}")
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        return conn
+        return psycopg2.connect(**DB_CONFIG)
     except Exception as e:
-        print(f"⚠️ No se pudo conectar a PostgreSQL: {e}")
+        print(f"No se pudo conectar a PostgreSQL: {e}")
         return None
+
+def release_db_connection(conn):
+    if conn is None:
+        return
+    p = get_db_pool()
+    if p and not p.closed:
+        try:
+            p.putconn(conn)
+            return
+        except Exception:
+            pass
+    try:
+        conn.close()
+    except Exception:
+        pass
 
 def init_db():
     retries = 10
@@ -41,7 +78,7 @@ def init_db():
             exists = cur.fetchone()
             if not exists:
                 cur.execute(f"CREATE DATABASE {DB_CONFIG['database']};")
-                print(f"✅ Base de datos '{DB_CONFIG['database']}' creada.")
+                print(f"Base de datos '{DB_CONFIG['database']}' creada.")
             
             cur.close()
             conn.close()
@@ -103,18 +140,29 @@ def init_db():
                     last_played_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (session_id, video_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS user_music_profile (
+                    id VARCHAR(64) PRIMARY KEY DEFAULT 'default_profile',
+                    favorite_artists JSONB DEFAULT '[]'::jsonb,
+                    favorite_songs JSONB DEFAULT '[]'::jsonb,
+                    favorite_genres JSONB DEFAULT '[]'::jsonb,
+                    disliked_artists JSONB DEFAULT '[]'::jsonb,
+                    disliked_songs JSONB DEFAULT '[]'::jsonb,
+                    disliked_genres JSONB DEFAULT '[]'::jsonb,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             conn.commit()
-            print("Tablas 'user_tokens', 'radio_sessions', 'session_interactions', 'song_favorites_repeats' y 'session_song_repeats' listas.")
+            print("Tablas 'user_tokens', 'radio_sessions', 'session_interactions', 'song_favorites_repeats', 'session_song_repeats' y 'user_music_profile' listas.")
             cur.close()
             conn.close()
             break
         except Exception as e:
             retries -= 1
             if retries == 0:
-                print(f"❌ Error fatal configurando la base de datos: {e}")
+                print(f"Error fatal configurando la base de datos: {e}")
                 break
-            print(f"⏳ Esperando a la base de datos... Reintentos restantes: {retries}")
+            print(f"Esperando a la base de datos... Reintentos restantes: {retries}")
             time.sleep(2)
 
 if __name__ == "__main__":

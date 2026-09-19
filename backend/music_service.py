@@ -2,6 +2,7 @@ import os
 import random
 import json
 import re
+import time
 import threading
 from datetime import datetime
 from fastapi import FastAPI, Query
@@ -10,10 +11,45 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from init_db import get_db_connection
+from init_db import get_db_connection, release_db_connection
 
 load_dotenv()
 app = FastAPI()
+
+class TTLCache:
+    def __init__(self, maxsize=150, ttl_seconds=1800):
+        self.maxsize = maxsize
+        self.ttl = ttl_seconds
+        self.cache = {}
+        self.lock = threading.Lock()
+
+    def get(self, key):
+        with self.lock:
+            if key not in self.cache:
+                return None
+            val, timestamp = self.cache[key]
+            if time.time() - timestamp > self.ttl:
+                del self.cache[key]
+                return None
+            return val
+
+    def set(self, key, value):
+        with self.lock:
+            if len(self.cache) >= self.maxsize:
+                try:
+                    oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k][1])
+                    del self.cache[oldest_key]
+                except Exception:
+                    pass
+            self.cache[key] = (value, time.time())
+
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+
+radio_cache = TTLCache(maxsize=120, ttl_seconds=1800)
+artist_tracks_cache = TTLCache(maxsize=100, ttl_seconds=1800)
+search_cache = TTLCache(maxsize=150, ttl_seconds=1200)
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,6 +64,11 @@ current_queue = []
 played_history = [] 
 current_source = None
 disliked_artists = set() 
+disliked_songs = []
+disliked_genres = set()
+favorite_artists = set()
+favorite_songs = []
+favorite_genres = set()
 currently_playing_id = None
 currently_playing_title = ""
 current_mode = "song"
@@ -125,6 +166,11 @@ def get_accurate_metadata(yt, video_id):
 
 def get_song_radio(yt, video_id, limit=25):
     """Obtiene la radio automática oficial de YouTube Music para un video dado usando la playlist RDAMVM"""
+    cached = radio_cache.get(video_id)
+    if cached is not None:
+        print(f"DEBUG: get_song_radio HIT CACHE para {video_id} ({len(cached)} canciones).")
+        return cached[:limit]
+
     try:
         res = yt._send_request('next', {'playlistId': 'RDAMVM' + video_id, 'isAudioOnly': True})
         tabs = res.get('contents', {}).get('singleColumnMusicWatchNextResultsRenderer', {}).get('tabbedRenderer', {}).get('watchNextTabbedResultsRenderer', {}).get('tabs', [])
@@ -146,6 +192,8 @@ def get_song_radio(yt, video_id, limit=25):
                             'artists': t.get('artists', [])
                         })
                 print(f"DEBUG: get_song_radio generó {len(clean_tracks)} canciones coherentes.")
+                if clean_tracks:
+                    radio_cache.set(video_id, clean_tracks)
                 return clean_tracks[:limit]
     except Exception as e:
         print(f"DEBUG: Error en get_song_radio para {video_id}: {str(e)}")
@@ -162,9 +210,60 @@ def normalize_song_title(title: str, artist: str = "") -> str:
     if artist:
         t = re.sub(re.escape(artist), '', t, flags=re.IGNORECASE)
     # Limpiar guiones y espacios residuales
-    t = re.sub(r'^[ \t\-_]+|[ \t\-_]+$', '', t)
     t = re.sub(r'[^\w\s]', '', t)
     return re.sub(r'\s+', ' ', t).strip().lower()
+
+def clean_display_title(title: str) -> str:
+    if not title:
+        return "Desconocido"
+    clean = re.sub(r'[\(\[](?:official\s+(?:music\s+)?video|official\s+audio|video\s+oficial|audio\s+oficial|4k|hd|remastered(?:\s+\d+)?|lyric\s+video|visualizer|audio).*?[\)\]]', '', title, flags=re.IGNORECASE)
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean or title
+
+def is_track_disliked(title: str, artist: str = "") -> bool:
+    if not title and not artist:
+        return False
+    t_clean = normalize_song_title(title, artist).lower() if title else ""
+    a_clean = (artist or "").lower().strip()
+
+    # 1. Chequeo por artista bloqueado
+    for dis_a in disliked_artists:
+        if not dis_a:
+            continue
+        dis_a_low = dis_a.lower().strip()
+        if dis_a_low == a_clean or (len(dis_a_low) >= 3 and dis_a_low in a_clean) or (len(a_clean) >= 3 and a_clean in dis_a_low):
+            return True
+
+    # 2. Chequeo por cancion vetada
+    for dis_s in disliked_songs:
+        if isinstance(dis_s, dict):
+            s_title = dis_s.get('title', '')
+            s_artist = dis_s.get('artist', '')
+            s_t_clean = normalize_song_title(s_title, s_artist).lower()
+            s_a_clean = (s_artist or '').lower().strip()
+
+            if s_a_clean:
+                artist_match = (s_a_clean in a_clean or a_clean in s_a_clean)
+                title_match = bool(s_t_clean and (s_t_clean == t_clean or (len(s_t_clean) >= 4 and s_t_clean in t_clean) or (len(t_clean) >= 4 and t_clean in s_t_clean)))
+                if artist_match and title_match:
+                    return True
+            else:
+                if s_t_clean and (s_t_clean == t_clean or (len(s_t_clean) >= 4 and s_t_clean in t_clean) or (len(t_clean) >= 4 and t_clean in s_t_clean)):
+                    return True
+        elif isinstance(dis_s, str):
+            s_clean = normalize_song_title(dis_s).lower()
+            if s_clean and (s_clean == t_clean or (len(s_clean) >= 4 and s_clean in t_clean) or (len(t_clean) >= 4 and t_clean in s_clean)):
+                return True
+
+    return False
+
+def purge_disliked_from_queue():
+    global current_queue
+    before_len = len(current_queue)
+    current_queue = [s for s in current_queue if not is_track_disliked(s.get('title', ''), s.get('artist', ''))]
+    diff = before_len - len(current_queue)
+    if diff > 0:
+        print(f"DEBUG: Purgadas {diff} canciones de la cola por coincidir con la lista de no me gusta.")
 
 def set_queue(tracks, source_name, clear=True, filter_history=True, append=False):
     global current_queue, current_source, currently_playing_id, currently_playing_title, played_history
@@ -196,10 +295,10 @@ def set_queue(tracks, source_name, clear=True, filter_history=True, append=False
             continue
         if v_id in history_ids or (norm_t and norm_t in history_titles):
             continue
-        if artist.lower() in [a.lower() for a in disliked_artists]:
+        if is_track_disliked(title, artist):
             continue
 
-        new_entries.append({"videoId": v_id, "title": title, "artist": artist})
+        new_entries.append({"videoId": v_id, "title": clean_display_title(title), "artist": artist})
         existing_ids.add(v_id)
         if norm_t:
             existing_titles.add(norm_t)
@@ -221,10 +320,10 @@ def set_queue(tracks, source_name, clear=True, filter_history=True, append=False
                 continue
             if v_id in recent_ids or (norm_t and norm_t in recent_titles):
                 continue
-            if artist.lower() in [a.lower() for a in disliked_artists]:
+            if is_track_disliked(title, artist):
                 continue
 
-            new_entries.append({"videoId": v_id, "title": title, "artist": artist})
+            new_entries.append({"videoId": v_id, "title": clean_display_title(title), "artist": artist})
             existing_ids.add(v_id)
             if norm_t:
                 existing_titles.add(norm_t)
@@ -252,6 +351,12 @@ def split_artist_names(query: str) -> List[str]:
 
 def get_single_artist_tracks(yt, artist_query: str):
     """Obtiene canciones exclusivas de un solo artista"""
+    norm_query = (artist_query or "").lower().strip()
+    cached = artist_tracks_cache.get(norm_query)
+    if cached is not None:
+        print(f"DEBUG: get_single_artist_tracks HIT CACHE para {norm_query} ({len(cached[1])} temas).")
+        return cached[0], list(cached[1])
+
     artist_res = yt.search(artist_query, filter="artists")
     if not artist_res:
         artist_res = yt.search(artist_query)
@@ -302,6 +407,10 @@ def get_single_artist_tracks(yt, artist_query: str):
                 "title": title,
                 "artist": artist
             })
+
+    if clean_tracks:
+        artist_tracks_cache.set(norm_query, (artist_name, clean_tracks))
+        artist_tracks_cache.set(artist_name.lower().strip(), (artist_name, clean_tracks))
 
     return artist_name, clean_tracks
 
@@ -600,7 +709,7 @@ def add_to_queue(q: str = Query(...)):
     except Exception as e: return {"error": str(e)}
 
 @app.get("/search")
-def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
+def search_song(q: Optional[str] = Query(None), type: str = Query("song"), force: bool = Query(False)):
     global current_queue, current_source, played_history, currently_playing_id, currently_playing_title, disliked_artists, current_mode, current_mode_param
     try:
         yt = get_yt()
@@ -798,7 +907,10 @@ def search_song(q: Optional[str] = Query(None), type: str = Query("song")):
         current_mode_param = ""
         results = yt.search(clean_q, filter="songs")
         if results:
-            song = next((r for r in results if r['artists'][0]['name'].lower() not in [a.lower() for a in disliked_artists] if r.get('artists')), results[0])
+            if force:
+                song = results[0]
+            else:
+                song = next((r for r in results if not is_track_disliked(r.get('title', ''), r.get('artists', [{}])[0].get('name', '') if r.get('artists') else r.get('artist', ''))), results[0])
             currently_playing_id = song['videoId']
             try:
                 radio_tracks = get_song_radio(yt, song['videoId'], limit=25)
@@ -889,7 +1001,7 @@ def batch_songs_endpoint(payload: BatchSongsPayload):
             if not results:
                 results = yt.search(sq)
             if results:
-                valid = next((r for r in results if r.get('videoId') and (not r.get('artists') or r['artists'][0]['name'].lower() not in [a.lower() for a in disliked_artists])), results[0])
+                valid = results[0]
                 if valid.get('videoId'):
                     artist_name = valid.get('artist') or (valid['artists'][0]['name'] if valid.get('artists') else "Unknown")
                     found_tracks.append({
@@ -994,7 +1106,7 @@ def record_favorite_interaction(video_id: str, title: str, artist: str, interact
 
         conn.commit()
         cur.close()
-        conn.close()
+        release_db_connection(conn)
         return {
             "video_id": video_id,
             "title": title_clean,
@@ -1009,7 +1121,7 @@ def record_favorite_interaction(video_id: str, title: str, artist: str, interact
     except Exception as e:
         print(f"Error registrando repetición favorita: {e}")
         if conn:
-            conn.close()
+            release_db_connection(conn)
         return {
             "total_count": 1, 
             "request_count": 1 if interaction_type == "request" else 0, 
@@ -1137,12 +1249,12 @@ def get_favorite_repeats(limit: int = 30, session_id: Optional[str] = Query(None
             } for r in rows]
 
         cur.close()
-        conn.close()
+        release_db_connection(conn)
         return {"favorites": favorites, "scope": scope, "session_id": session_id}
     except Exception as e:
         print(f"Error obteniendo favoritos: {e}")
         if conn:
-            conn.close()
+            release_db_connection(conn)
         return {"favorites": [], "scope": scope}
 
 @app.get("/favorites/count/{video_id}")
@@ -1185,7 +1297,7 @@ def get_favorite_count(video_id: str, session_id: Optional[str] = Query(None)):
                 pass
 
         cur.close()
-        conn.close()
+        release_db_connection(conn)
         return {
             "totalCount": global_total,
             "requestCount": global_req,
@@ -1196,7 +1308,7 @@ def get_favorite_count(video_id: str, session_id: Optional[str] = Query(None)):
         }
     except Exception as e:
         if conn:
-            conn.close()
+            release_db_connection(conn)
         return {"totalCount": 0, "requestCount": 0, "likeCount": 0, "sessionCount": 0}
 
 @app.get("/history")
@@ -1367,7 +1479,7 @@ def get_current_session():
         """)
         row = cur.fetchone()
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
         if not row:
             return {"exists": False, "session": None}
@@ -1445,7 +1557,7 @@ def save_session(payload: SessionSavePayload):
         cur.execute("UPDATE radio_sessions SET is_active = FALSE WHERE id != %s;", (payload.id,))
         conn.commit()
         cur.close()
-        conn.close()
+        release_db_connection(conn)
         return {"success": True, "saved_to": "database", "id": payload.id}
     except Exception as e:
         print(f"Error guardando sesión en BD: {e}")
@@ -1473,7 +1585,7 @@ def reset_session(payload: Optional[SessionResetPayload] = None):
             """, (new_id, sess_name))
             conn.commit()
             cur.close()
-            conn.close()
+            release_db_connection(conn)
         except Exception as e:
             print(f"Error reseteando sesión en BD: {e}")
 
@@ -1517,7 +1629,7 @@ def create_session(payload: SessionCreatePayload):
             """, (new_id, sess_name, json.dumps(initial_chat)))
             conn.commit()
             cur.close()
-            conn.close()
+            release_db_connection(conn)
         except Exception as e:
             print(f"Error creando nueva sesión en BD: {e}")
 
@@ -1554,7 +1666,7 @@ def rename_session(session_id: str, payload: SessionRenamePayload):
         """, (new_name, session_id))
         conn.commit()
         cur.close()
-        conn.close()
+        release_db_connection(conn)
         return {"success": True, "id": session_id, "name": new_name}
     except Exception as e:
         print(f"Error renombrando sesión: {e}")
@@ -1640,7 +1752,7 @@ def delete_session(session_id: str):
                 }
 
         cur.close()
-        conn.close()
+        release_db_connection(conn)
         return {
             "success": True,
             "deleted_id": session_id,
@@ -1669,7 +1781,7 @@ def list_sessions():
         """)
         rows = cur.fetchall()
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
         sessions = []
         for r in rows:
@@ -1708,7 +1820,7 @@ def load_session(payload: SessionLoadPayload):
         row = cur.fetchone()
         conn.commit()
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
         if not row:
             return {"error": "Sesión no encontrada"}
@@ -1743,6 +1855,173 @@ def load_session(payload: SessionLoadPayload):
         }
     except Exception as e:
         print(f"Error cargando sesión {payload.id}: {e}")
+        return {"error": str(e)}
+
+# ==========================================
+# PERFIL DE GUSTOS Y RESTRICCIONES MUSICALES
+# ==========================================
+
+class TasteProfilePayload(BaseModel):
+    user_id: Optional[str] = "default_user"
+    favorite_artists: Optional[List[str]] = []
+    favorite_songs: Optional[List[Any]] = []
+    favorite_genres: Optional[List[str]] = []
+    disliked_artists: Optional[List[str]] = []
+    disliked_songs: Optional[List[Any]] = []
+    disliked_genres: Optional[List[str]] = []
+
+def load_taste_profile_from_db():
+    global favorite_artists, favorite_songs, favorite_genres, disliked_artists, disliked_songs, disliked_genres
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT favorite_artists, favorite_songs, favorite_genres,
+                   disliked_artists, disliked_songs, disliked_genres
+            FROM user_music_profile
+            WHERE id IN ('default_user', 'default_profile')
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT 1;
+        """)
+        row = cur.fetchone()
+        cur.close()
+        release_db_connection(conn)
+
+        if row:
+            fav_a = parse_json_field(row[0], [])
+            fav_s = parse_json_field(row[1], [])
+            fav_g = parse_json_field(row[2], [])
+            dis_a = parse_json_field(row[3], [])
+            dis_s = parse_json_field(row[4], [])
+            dis_g = parse_json_field(row[5], [])
+
+            favorite_artists = set(fav_a) if isinstance(fav_a, list) else set()
+            favorite_songs = fav_s if isinstance(fav_s, list) else []
+            favorite_genres = set(fav_g) if isinstance(fav_g, list) else set()
+            disliked_artists = set(dis_a) if isinstance(dis_a, list) else set()
+            disliked_songs = dis_s if isinstance(dis_s, list) else []
+            disliked_genres = set(dis_g) if isinstance(dis_g, list) else set()
+            print(f"DEBUG: Perfil musical cargado desde DB. Favoritos: {len(favorite_artists)} art, {len(favorite_songs)} tracks. Bloqueados: {len(disliked_artists)} art, {len(disliked_songs)} tracks.")
+    except Exception as e:
+        print(f"DEBUG: Error cargando perfil musical de DB: {e}")
+
+@app.on_event("startup")
+def startup_event():
+    load_taste_profile_from_db()
+
+try:
+    load_taste_profile_from_db()
+except Exception as _e:
+    pass
+
+@app.get("/profile/taste")
+def get_taste_profile():
+    global favorite_artists, favorite_songs, favorite_genres, disliked_artists, disliked_songs, disliked_genres
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT favorite_artists, favorite_songs, favorite_genres,
+                       disliked_artists, disliked_songs, disliked_genres, updated_at
+                FROM user_music_profile
+                WHERE id IN ('default_user', 'default_profile')
+                ORDER BY updated_at DESC NULLS LAST
+                LIMIT 1;
+            """)
+            row = cur.fetchone()
+            cur.close()
+            release_db_connection(conn)
+            if row:
+                return {
+                    "favorite_artists": parse_json_field(row[0], []),
+                    "favorite_songs": parse_json_field(row[1], []),
+                    "favorite_genres": parse_json_field(row[2], []),
+                    "disliked_artists": parse_json_field(row[3], []),
+                    "disliked_songs": parse_json_field(row[4], []),
+                    "disliked_genres": parse_json_field(row[5], []),
+                    "updated_at": str(row[6]) if row[6] else None
+                }
+        except Exception as e:
+            print(f"DEBUG: Error consultando user_music_profile: {e}")
+    
+    return {
+        "favorite_artists": sorted(list(favorite_artists)),
+        "favorite_songs": favorite_songs,
+        "favorite_genres": sorted(list(favorite_genres)),
+        "disliked_artists": sorted(list(disliked_artists)),
+        "disliked_songs": disliked_songs,
+        "disliked_genres": sorted(list(disliked_genres)),
+        "updated_at": None
+    }
+
+@app.post("/profile/taste")
+def save_taste_profile(payload: TasteProfilePayload):
+    global favorite_artists, favorite_songs, favorite_genres, disliked_artists, disliked_songs, disliked_genres
+    
+    fav_a = list(dict.fromkeys([x.strip() for x in (payload.favorite_artists or []) if x and x.strip()]))
+    fav_s = payload.favorite_songs or []
+    fav_g = list(dict.fromkeys([x.strip() for x in (payload.favorite_genres or []) if x and x.strip()]))
+    dis_a = list(dict.fromkeys([x.strip() for x in (payload.disliked_artists or []) if x and x.strip()]))
+    dis_s = payload.disliked_songs or []
+    dis_g = list(dict.fromkeys([x.strip() for x in (payload.disliked_genres or []) if x and x.strip()]))
+
+    favorite_artists = set(fav_a)
+    favorite_songs = fav_s
+    favorite_genres = set(fav_g)
+    disliked_artists = set(dis_a)
+    disliked_songs = dis_s
+    disliked_genres = set(dis_g)
+
+    purge_disliked_from_queue()
+
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "Base de datos no disponible"}
+    try:
+        cur = conn.cursor()
+        target_id = payload.user_id or 'default_user'
+        cur.execute("""
+            INSERT INTO user_music_profile (
+                id, favorite_artists, favorite_songs, favorite_genres,
+                disliked_artists, disliked_songs, disliked_genres, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+                favorite_artists = EXCLUDED.favorite_artists,
+                favorite_songs = EXCLUDED.favorite_songs,
+                favorite_genres = EXCLUDED.favorite_genres,
+                disliked_artists = EXCLUDED.disliked_artists,
+                disliked_songs = EXCLUDED.disliked_songs,
+                disliked_genres = EXCLUDED.disliked_genres,
+                updated_at = NOW();
+        """, (
+            target_id,
+            json.dumps(fav_a),
+            json.dumps(fav_s),
+            json.dumps(fav_g),
+            json.dumps(dis_a),
+            json.dumps(dis_s),
+            json.dumps(dis_g)
+        ))
+        conn.commit()
+        cur.close()
+        release_db_connection(conn)
+        return {
+            "status": "success",
+            "message": "Perfil musical guardado correctamente",
+            "profile": {
+                "favorite_artists": fav_a,
+                "favorite_songs": fav_s,
+                "favorite_genres": fav_g,
+                "disliked_artists": dis_a,
+                "disliked_songs": dis_s,
+                "disliked_genres": dis_g
+            }
+        }
+    except Exception as e:
+        print(f"DEBUG: Error guardando user_music_profile: {e}")
         return {"error": str(e)}
 
 if __name__ == "__main__":

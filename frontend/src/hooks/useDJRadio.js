@@ -64,6 +64,22 @@ export default function useDJRadio() {
   const [globalFavoritesList, setGlobalFavoritesList] = useState([]);
   const [loadingFavorites, setLoadingFavorites] = useState(false);
 
+  // --- Estados de Perfil y Gustos Musicales ---
+  const [tasteProfile, setTasteProfile] = useState({
+    favorite_artists: [],
+    favorite_songs: [],
+    favorite_genres: [],
+    disliked_artists: [],
+    disliked_songs: [],
+    disliked_genres: []
+  });
+  const [isTasteModalOpen, setIsTasteModalOpen] = useState(false);
+  const [loadingTasteProfile, setLoadingTasteProfile] = useState(false);
+  const tasteProfileRef = useRef(tasteProfile);
+  useEffect(() => {
+    tasteProfileRef.current = tasteProfile;
+  }, [tasteProfile]);
+
   const frequencyRef = useRef(frequency);
   const personalityRef = useRef(personality);
   const crossfadeRef = useRef(crossfade);
@@ -106,6 +122,61 @@ export default function useDJRadio() {
     duckingVolumeRef.current = num;
     localStorage.setItem('dj_ducking_volume', num);
   };
+
+  // --- Selección y Muestra de Voz del Locutor (ElevenLabs) ---
+  const [selectedVoice, setSelectedVoiceState] = useState(() => {
+    return localStorage.getItem('dj_voice_id') || 'IKne3meq5aSn9XLyUdCD';
+  });
+  const selectedVoiceRef = useRef(selectedVoice);
+  const setSelectedVoice = useCallback((val) => {
+    setSelectedVoiceState(val);
+    selectedVoiceRef.current = val;
+    localStorage.setItem('dj_voice_id', val);
+  }, []);
+
+  const [playingPreviewVoiceId, setPlayingPreviewVoiceId] = useState(null);
+  const previewAudioRef = useRef(null);
+
+  const handlePlayVoicePreview = useCallback(async (voiceId, previewText) => {
+    if (previewAudioRef.current) {
+      try { previewAudioRef.current.pause(); } catch (e) {}
+      previewAudioRef.current = null;
+    }
+
+    if (playingPreviewVoiceId === voiceId) {
+      setPlayingPreviewVoiceId(null);
+      return;
+    }
+
+    setPlayingPreviewVoiceId(voiceId);
+
+    try {
+      const res = await fetch('http://127.0.0.1:3001/api/voice/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voice_id: voiceId, text: previewText })
+      });
+      const data = await res.json();
+      if (data && data.audioUrl) {
+        const audio = new Audio(`http://127.0.0.1:3001${data.audioUrl}`);
+        previewAudioRef.current = audio;
+        audio.onended = () => {
+          setPlayingPreviewVoiceId(null);
+          previewAudioRef.current = null;
+        };
+        audio.onerror = () => {
+          setPlayingPreviewVoiceId(null);
+          previewAudioRef.current = null;
+        };
+        await audio.play();
+      } else {
+        setPlayingPreviewVoiceId(null);
+      }
+    } catch (err) {
+      console.error("Error reproduciendo muestra de voz:", err);
+      setPlayingPreviewVoiceId(null);
+    }
+  }, [playingPreviewVoiceId]);
 
   // --- Estados de Persistencia de Sesión (PostgreSQL + LocalStorage) ---
   const [sessionId, setSessionId] = useState(() => {
@@ -207,6 +278,57 @@ export default function useDJRadio() {
     }
   }, [sessionId]);
 
+  const fetchTasteProfile = useCallback(async () => {
+    setLoadingTasteProfile(true);
+    try {
+      const res = await fetch('http://127.0.0.1:3001/api/profile/taste');
+      if (res.ok) {
+        const data = await res.json();
+        if (data) {
+          setTasteProfile({
+            favorite_artists: data.favorite_artists || [],
+            favorite_songs: data.favorite_songs || [],
+            favorite_genres: data.favorite_genres || [],
+            disliked_artists: data.disliked_artists || [],
+            disliked_songs: data.disliked_songs || [],
+            disliked_genres: data.disliked_genres || []
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("Error cargando perfil musical:", err);
+    } finally {
+      setLoadingTasteProfile(false);
+    }
+  }, []);
+
+  const saveTasteProfile = useCallback(async (updatedProfile) => {
+    setLoadingTasteProfile(true);
+    try {
+      const res = await fetch('http://127.0.0.1:3001/api/profile/taste', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedProfile)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.profile) {
+          setTasteProfile(data.profile);
+        }
+        return data;
+      }
+    } catch (err) {
+      console.error("Error guardando perfil musical:", err);
+      throw err;
+    } finally {
+      setLoadingTasteProfile(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTasteProfile();
+  }, [fetchTasteProfile]);
+
   const playerRef = useRef(null);
   const currentSongRef = useRef(null);
   const preloadedDataRef = useRef(null);
@@ -232,15 +354,28 @@ export default function useDJRadio() {
     messageRef.current = message;
   }, [message]);
 
-  // --- API / State Synchronizers ---
+  // --- API / State Synchronizers (Optimizados para evitar re-renders innecesarios) ---
+  const isSameTrackList = (listA, listB) => {
+    if (!listA && !listB) return true;
+    if (!listA || !listB) return false;
+    if (listA.length !== listB.length) return false;
+    for (let i = 0; i < listA.length; i++) {
+      if ((listA[i]?.videoId || listA[i]?.id) !== (listB[i]?.videoId || listB[i]?.id)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   const syncStatus = useCallback(async () => {
     try {
       const res = await fetch('http://127.0.0.1:8000/status');
       const data = await res.json();
-      setIsConnected(data.status === 'logeado');
-      setQueue(data.queue || []);
-      setHistory(data.history || []);
-      setQueueSource(data.source);
+      const newStatus = data.status === 'logeado';
+      setIsConnected(prev => prev !== newStatus ? newStatus : prev);
+      setQueue(prev => isSameTrackList(prev, data.queue) ? prev : (data.queue || []));
+      setHistory(prev => isSameTrackList(prev, data.history) ? prev : (data.history || []));
+      setQueueSource(prev => prev !== data.source ? data.source : prev);
     } catch (e) { 
       console.error(e); 
     }
@@ -329,7 +464,10 @@ export default function useDJRadio() {
           currentSong: currentSongRef.current,
           personality: personalityRef.current,
           frequency: frequencyRef.current,
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          session_id: sessionId,
+          taste_profile: tasteProfileRef.current || tasteProfile,
+          voice_id: selectedVoiceRef.current || selectedVoice
         })
       });
       const data = await res.json();
@@ -398,7 +536,9 @@ export default function useDJRadio() {
           personality: personalityRef.current,
           frequency: frequencyRef.current,
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          session_id: sessionId
+          session_id: sessionId,
+          taste_profile: tasteProfileRef.current || tasteProfile,
+          voice_id: selectedVoiceRef.current || selectedVoice
         })
       });
       const data = await response.json();
@@ -1802,6 +1942,18 @@ export default function useDJRadio() {
     sessionFavoritesList,
     globalFavoritesList,
     loadingFavorites,
-    fetchFavorites
+    fetchFavorites,
+    // Perfil y Gustos Musicales
+    tasteProfile,
+    isTasteModalOpen,
+    setIsTasteModalOpen,
+    loadingTasteProfile,
+    fetchTasteProfile,
+    saveTasteProfile,
+    // Voz del Locutor
+    selectedVoice,
+    setSelectedVoice,
+    playingPreviewVoiceId,
+    handlePlayVoicePreview
   };
 }

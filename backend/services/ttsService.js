@@ -66,7 +66,7 @@ function isQuotaError(error) {
   return false;
 }
 
-async function generateTTS(text) {
+async function generateTTS(text, customVoiceId = null) {
   if (!text || !text.trim()) return null;
   const keys = getElevenLabsKeys();
   if (keys.length === 0) {
@@ -74,9 +74,11 @@ async function generateTTS(text) {
     return null;
   }
 
+  const voiceToUse = (customVoiceId && customVoiceId.trim()) || process.env.ELEVENLABS_VOICE_ID || ELEVENLABS_VOICE_ID;
+
   // Normalizar texto para clave de caché
   const cleanText = text.trim().toLowerCase().replace(/\s+/g, ' ');
-  const textHash = crypto.createHash('md5').update(`${ELEVENLABS_VOICE_ID}_${cleanText}`).digest('hex');
+  const textHash = crypto.createHash('md5').update(`${voiceToUse}_${cleanText}`).digest('hex');
   const fileName = `tts_cache_${textHash}.mp3`;
   const filePath = path.join(audioFolder, fileName);
 
@@ -125,7 +127,7 @@ async function generateTTS(text) {
 
     try {
       console.log(`Generando voz con ElevenLabs (Clave ${activeKeyIndex + 1}/${keys.length} ${maskKey(currentKey)})... (Texto: "${text}")`);
-      const response = await axios.post(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}?optimize_streaming_latency=3`, {
+      const response = await axios.post(`https://api.elevenlabs.io/v1/text-to-speech/${voiceToUse}?optimize_streaming_latency=3`, {
         text: text,
         model_id: "eleven_flash_v2_5",
         voice_settings: { stability: 0.5, similarity_boost: 0.75 }

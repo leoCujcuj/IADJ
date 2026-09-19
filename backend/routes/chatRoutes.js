@@ -19,12 +19,22 @@ const {
   handleFallbackVideo,
   handleGetFavorites,
   handleGetFavoriteCount,
-  handleRecordHistory
+  handleRecordHistory,
+  handleGetTasteProfile,
+  handleSaveTasteProfile,
+  handleVoicePreview
 } = require('../controllers/chatController');
 
 router.post('/chat', handleChat);
 router.post('/preload', handlePreload);
 router.post('/session/transition', handleSessionTransition);
+
+// Ruta para preview de voz del locutor
+router.post('/voice/preview', handleVoicePreview);
+
+// Rutas de perfil musical (gustos y restricciones)
+router.get('/profile/taste', handleGetTasteProfile);
+router.post('/profile/taste', handleSaveTasteProfile);
 
 // Ruta para registrar reproducción en el historial oficial de YouTube
 router.post('/history/record/:videoId', handleRecordHistory);
