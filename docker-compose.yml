@@ -70,6 +70,7 @@ services:
       - "5174:5174"
     volumes:
       - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
     depends_on:
       - node-backend
     restart: always

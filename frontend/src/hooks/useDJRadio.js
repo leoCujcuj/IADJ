@@ -1,334 +1,114 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Music, Disc, ListMusic, User } from 'lucide-react';
 
+import useDialog from './useDialog';
+import useAudioSettings from './useAudioSettings';
+import useTasteProfile from './useTasteProfile';
+import useVoiceRecognition from './useVoiceRecognition';
+import useSongTrivia from './useSongTrivia';
+import useFavorites from './useFavorites';
+import useRadioSessions from './useRadioSessions';
+import useMediaSession from './useMediaSession';
+
+/**
+ * Hook orquestador principal de Gemini Radio.
+ * Ensambla los sub-hooks especializados manteniendo una API limpia y desacoplada.
+ */
 export default function useDJRadio() {
+  // 1. Mensajeria y Chat
   const [message, setMessage] = useState('');
   const [chatHistory, setChatHistory] = useState([
     { sender: 'dj', text: '¡Qué onda mucha! Soy tu DJ de Gemini Radio. ¿Qué te pongo hoy?' }
   ]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [currentSong, setCurrentSong] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [isListening, setIsListening] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+
+  // 2. Estado de reproduccion y cola
+  const [currentSong, setCurrentSong] = useState(null);
   const [queue, setQueue] = useState([]);
   const [history, setHistory] = useState([]);
   const [queueSource, setQueueSource] = useState(null);
   const [manualSearch, setManualSearch] = useState('');
-  const [isLiked, setIsLiked] = useState(false);
-  const [isDisliked, setIsDisliked] = useState(false);
-  const [dislikeStreak, setDislikeStreak] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [searchType, setSearchType] = useState('song');
+  const [isLyricsOpen, setIsLyricsOpen] = useState(false);
 
+  // Modos de busqueda para el input del chat
   const modes = [
     { id: 'song', icon: Music, title: 'Modo Canción', placeholder: 'canción' },
     { id: 'album', icon: Disc, title: 'Modo Álbum', placeholder: 'álbum' },
     { id: 'playlist', icon: ListMusic, title: 'Modo Playlist', placeholder: 'playlist' },
     { id: 'artist', icon: User, title: 'Modo Artista', placeholder: 'artista' }
   ];
-  
   const sortedModes = [...modes].sort((a, b) => a.id === searchType ? -1 : b.id === searchType ? 1 : 0);
-  const activeMode = modes.find(m => m.id === searchType);  
+  const activeMode = modes.find(m => m.id === searchType);
 
-  const [frequency, setFrequencyState] = useState(() => {
-    const saved = localStorage.getItem('dj_frequency');
-    return saved !== null ? Number(saved) : 5;
+  // 3. Sub-hooks modulares
+  const { modalDialog, setModalDialog, showConfirm, showAlert } = useDialog();
+
+  const {
+    frequency,
+    setFrequency,
+    personality,
+    setPersonality,
+    crossfade,
+    setCrossfade,
+    autoPauseOnTabChange,
+    setAutoPauseOnTabChange,
+    duckingVolume,
+    setDuckingVolume,
+    isSettingsOpen,
+    setIsSettingsOpen,
+    selectedVoice,
+    setSelectedVoice,
+    playingPreviewVoiceId,
+    handlePlayVoicePreview,
+    frequencyRef,
+    personalityRef,
+    crossfadeRef,
+    autoPauseOnTabChangeRef,
+    duckingVolumeRef,
+    selectedVoiceRef,
+    wasPlayingBeforeAutoPauseRef,
+    wasDJSpeakingBeforeAutoPauseRef,
+    wasSpeechSpeakingBeforeAutoPauseRef,
+    tabIdRef,
+    broadcastChannelRef
+  } = useAudioSettings();
+
+  const {
+    tasteProfile,
+    isTasteModalOpen,
+    setIsTasteModalOpen,
+    loadingTasteProfile,
+    fetchTasteProfile,
+    saveTasteProfile,
+    tasteProfileRef
+  } = useTasteProfile();
+
+  const { isListening, toggleListening } = useVoiceRecognition({
+    message,
+    setMessage,
+    showAlert
   });
-  const [personality, setPersonalityState] = useState(() => {
-    return localStorage.getItem('dj_personality') || 'chill';
+
+  const {
+    isTriviaOpen,
+    setIsTriviaOpen,
+    currentTrivia,
+    loadingTrivia,
+    handleOpenTrivia,
+    handleAnotherTrivia,
+    handleAskDJMore,
+    handleShareTriviaToChat
+  } = useSongTrivia({
+    currentSong,
+    setMessage,
+    setChatHistory
   });
-  const [crossfade, setCrossfadeState] = useState(() => {
-    return localStorage.getItem('dj_crossfade') !== 'false';
-  });
-  const [autoPauseOnTabChange, setAutoPauseOnTabChangeState] = useState(() => {
-    return localStorage.getItem('dj_auto_pause_tab') === 'true';
-  });
-  const [duckingVolume, setDuckingVolumeState] = useState(() => {
-    const saved = localStorage.getItem('dj_ducking_volume');
-    return saved !== null ? Number(saved) : 20;
-  });
 
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isLyricsOpen, setIsLyricsOpen] = useState(false);
-  const [isTriviaOpen, setIsTriviaOpen] = useState(false);
-  const [currentTrivia, setCurrentTrivia] = useState(null);
-  const [loadingTrivia, setLoadingTrivia] = useState(false);
-  const triviaCacheRef = useRef(new Map());
-
-  // --- Estados de Canciones Favoritas en Repetición ---
-  const [repeatCount, setRepeatCount] = useState(0);
-  const [globalRepeatCount, setGlobalRepeatCount] = useState(0);
-  const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
-  const [favoritesList, setFavoritesList] = useState([]);
-  const [sessionFavoritesList, setSessionFavoritesList] = useState([]);
-  const [globalFavoritesList, setGlobalFavoritesList] = useState([]);
-  const [loadingFavorites, setLoadingFavorites] = useState(false);
-
-  // --- Estados de Perfil y Gustos Musicales ---
-  const [tasteProfile, setTasteProfile] = useState({
-    favorite_artists: [],
-    favorite_songs: [],
-    favorite_genres: [],
-    disliked_artists: [],
-    disliked_songs: [],
-    disliked_genres: []
-  });
-  const [isTasteModalOpen, setIsTasteModalOpen] = useState(false);
-  const [loadingTasteProfile, setLoadingTasteProfile] = useState(false);
-  const tasteProfileRef = useRef(tasteProfile);
-  useEffect(() => {
-    tasteProfileRef.current = tasteProfile;
-  }, [tasteProfile]);
-
-  const frequencyRef = useRef(frequency);
-  const personalityRef = useRef(personality);
-  const crossfadeRef = useRef(crossfade);
-  const autoPauseOnTabChangeRef = useRef(autoPauseOnTabChange);
-  const duckingVolumeRef = useRef(duckingVolume);
-  const wasPlayingBeforeAutoPauseRef = useRef(false);
-  const wasDJSpeakingBeforeAutoPauseRef = useRef(false);
-  const wasSpeechSpeakingBeforeAutoPauseRef = useRef(false);
-  const tabIdRef = useRef(`tab_${Math.random().toString(36).slice(2, 9)}`);
-  const broadcastChannelRef = useRef(null);
-
-  const setFrequency = (val) => {
-    setFrequencyState(val);
-    frequencyRef.current = val;
-    localStorage.setItem('dj_frequency', val);
-  };
-  const setPersonality = (val) => {
-    setPersonalityState(val);
-    personalityRef.current = val;
-    localStorage.setItem('dj_personality', val);
-  };
-  const setCrossfade = (val) => {
-    setCrossfadeState(val);
-    crossfadeRef.current = val;
-    localStorage.setItem('dj_crossfade', val);
-  };
-  const setAutoPauseOnTabChange = (val) => {
-    setAutoPauseOnTabChangeState(val);
-    autoPauseOnTabChangeRef.current = val;
-    localStorage.setItem('dj_auto_pause_tab', val);
-    if (!val) {
-      wasPlayingBeforeAutoPauseRef.current = false;
-      wasDJSpeakingBeforeAutoPauseRef.current = false;
-      wasSpeechSpeakingBeforeAutoPauseRef.current = false;
-    }
-  };
-  const setDuckingVolume = (val) => {
-    const num = Math.max(0, Math.min(100, Number(val)));
-    setDuckingVolumeState(num);
-    duckingVolumeRef.current = num;
-    localStorage.setItem('dj_ducking_volume', num);
-  };
-
-  // --- Selección y Muestra de Voz del Locutor (ElevenLabs) ---
-  const [selectedVoice, setSelectedVoiceState] = useState(() => {
-    return localStorage.getItem('dj_voice_id') || 'IKne3meq5aSn9XLyUdCD';
-  });
-  const selectedVoiceRef = useRef(selectedVoice);
-  const setSelectedVoice = useCallback((val) => {
-    setSelectedVoiceState(val);
-    selectedVoiceRef.current = val;
-    localStorage.setItem('dj_voice_id', val);
-  }, []);
-
-  const [playingPreviewVoiceId, setPlayingPreviewVoiceId] = useState(null);
-  const previewAudioRef = useRef(null);
-
-  const handlePlayVoicePreview = useCallback(async (voiceId, previewText) => {
-    if (previewAudioRef.current) {
-      try { previewAudioRef.current.pause(); } catch (e) {}
-      previewAudioRef.current = null;
-    }
-
-    if (playingPreviewVoiceId === voiceId) {
-      setPlayingPreviewVoiceId(null);
-      return;
-    }
-
-    setPlayingPreviewVoiceId(voiceId);
-
-    try {
-      const res = await fetch('http://127.0.0.1:3001/api/voice/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voice_id: voiceId, text: previewText })
-      });
-      const data = await res.json();
-      if (data && data.audioUrl) {
-        const audio = new Audio(`http://127.0.0.1:3001${data.audioUrl}`);
-        previewAudioRef.current = audio;
-        audio.onended = () => {
-          setPlayingPreviewVoiceId(null);
-          previewAudioRef.current = null;
-        };
-        audio.onerror = () => {
-          setPlayingPreviewVoiceId(null);
-          previewAudioRef.current = null;
-        };
-        await audio.play();
-      } else {
-        setPlayingPreviewVoiceId(null);
-      }
-    } catch (err) {
-      console.error("Error reproduciendo muestra de voz:", err);
-      setPlayingPreviewVoiceId(null);
-    }
-  }, [playingPreviewVoiceId]);
-
-  // --- Estados de Persistencia de Sesión (PostgreSQL + LocalStorage) ---
-  const [sessionId, setSessionId] = useState(() => {
-    return localStorage.getItem('dj_session_id') || 'session_default';
-  });
-  const [sessionName, setSessionName] = useState('Sesión Principal');
-  const [sessionStatus, setSessionStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'restored' | 'error'
-  const [isSessionsOpen, setIsSessionsOpen] = useState(false);
-  const [sessionsList, setSessionsList] = useState([]);
-  const isRestoringSessionRef = useRef(true);
-  const saveTimeoutRef = useRef(null);
-
-  // --- Sistema Profesional de Confirmaciones y Alertas (Reemplazo de alert/confirm) ---
-  const [modalDialog, setModalDialog] = useState(null);
-
-  const showConfirm = useCallback(({ title, message, type = 'warning', confirmText = 'Aceptar', cancelText = 'Cancelar' }) => {
-    return new Promise((resolve) => {
-      setModalDialog({
-        isOpen: true,
-        title,
-        message,
-        type,
-        confirmText,
-        cancelText,
-        isAlert: false,
-        onConfirm: () => {
-          setModalDialog(null);
-          resolve(true);
-        },
-        onClose: () => {
-          setModalDialog(null);
-          resolve(false);
-        }
-      });
-    });
-  }, []);
-
-  const showAlert = useCallback(({ title, message, type = 'info', confirmText = 'Entendido' }) => {
-    return new Promise((resolve) => {
-      setModalDialog({
-        isOpen: true,
-        title,
-        message,
-        type,
-        confirmText,
-        isAlert: true,
-        onConfirm: () => {
-          setModalDialog(null);
-          resolve(true);
-        },
-        onClose: () => {
-          setModalDialog(null);
-          resolve(true);
-        }
-      });
-    });
-  }, []);
-
-  const fetchSessions = useCallback(async () => {
-    try {
-      const res = await fetch('http://127.0.0.1:3001/api/sessions');
-      const data = await res.json();
-      if (data && Array.isArray(data.sessions)) {
-        setSessionsList(data.sessions);
-      }
-    } catch (e) {
-      console.warn("Error cargando lista de sesiones:", e);
-    }
-  }, []);
-
-  const fetchFavorites = useCallback(async (customSessionId = null) => {
-    setLoadingFavorites(true);
-    const targetSessionId = customSessionId || sessionId;
-    try {
-      const [sessionRes, globalRes] = await Promise.all([
-        fetch(`http://127.0.0.1:3001/api/favorites/repeats?scope=session&session_id=${encodeURIComponent(targetSessionId)}`),
-        fetch('http://127.0.0.1:3001/api/favorites/repeats?scope=general')
-      ]);
-      const sessionData = await sessionRes.json();
-      const globalData = await globalRes.json();
-
-      if (sessionData && Array.isArray(sessionData.favorites)) {
-        setSessionFavoritesList(sessionData.favorites);
-      } else {
-        setSessionFavoritesList([]);
-      }
-
-      if (globalData && Array.isArray(globalData.favorites)) {
-        setGlobalFavoritesList(globalData.favorites);
-        setFavoritesList(globalData.favorites);
-      } else {
-        setGlobalFavoritesList([]);
-        setFavoritesList([]);
-      }
-    } catch (e) {
-      console.warn("Error cargando lista de favoritas en repetición:", e);
-    } finally {
-      setLoadingFavorites(false);
-    }
-  }, [sessionId]);
-
-  const fetchTasteProfile = useCallback(async () => {
-    setLoadingTasteProfile(true);
-    try {
-      const res = await fetch('http://127.0.0.1:3001/api/profile/taste');
-      if (res.ok) {
-        const data = await res.json();
-        if (data) {
-          setTasteProfile({
-            favorite_artists: data.favorite_artists || [],
-            favorite_songs: data.favorite_songs || [],
-            favorite_genres: data.favorite_genres || [],
-            disliked_artists: data.disliked_artists || [],
-            disliked_songs: data.disliked_songs || [],
-            disliked_genres: data.disliked_genres || []
-          });
-        }
-      }
-    } catch (err) {
-      console.warn("Error cargando perfil musical:", err);
-    } finally {
-      setLoadingTasteProfile(false);
-    }
-  }, []);
-
-  const saveTasteProfile = useCallback(async (updatedProfile) => {
-    setLoadingTasteProfile(true);
-    try {
-      const res = await fetch('http://127.0.0.1:3001/api/profile/taste', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedProfile)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.profile) {
-          setTasteProfile(data.profile);
-        }
-        return data;
-      }
-    } catch (err) {
-      console.error("Error guardando perfil musical:", err);
-      throw err;
-    } finally {
-      setLoadingTasteProfile(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchTasteProfile();
-  }, [fetchTasteProfile]);
-
+  // Refs de reproduccion y control interno
   const playerRef = useRef(null);
   const currentSongRef = useRef(null);
   const preloadedDataRef = useRef(null);
@@ -337,24 +117,100 @@ export default function useDJRadio() {
   const preloadAbortControllerRef = useRef(null);
   const preloadedAudioRef = useRef(null);
   const removedVideoIdsRef = useRef(new Set());
+  const rewoundVideoIdsRef = useRef(new Set());
   const executeTransitionRef = useRef(null);
   const blockedVideoIdsRef = useRef(new Set());
   const fallbackAttemptsRef = useRef(new Map());
   const skipToNextImmediatelyRef = useRef(null);
 
-  const chatEndRef = useRef(null);   
+  const chatEndRef = useRef(null);
   const audioPlayerRef = useRef(new Audio());
-  const recognitionRef = useRef(null);
-  const isListeningRef = useRef(false);
   const handleNextRef = useRef(null);
-  const messageRef = useRef(message);
-  const initialTextRef = useRef('');
+  const handlePreviousRef = useRef(null);
+
+  const queueRef = useRef([]);
+  const historyRef = useRef([]);
+  const playedHistoryRef = useRef([]);
 
   useEffect(() => {
-    messageRef.current = message;
-  }, [message]);
+    queueRef.current = queue;
+  }, [queue]);
 
-  // --- API / State Synchronizers (Optimizados para evitar re-renders innecesarios) ---
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  // Limpieza de precargas
+  const clearPreload = useCallback(() => {
+    preloadedDataRef.current = null;
+    preloadTriggeredRef.current = null;
+    if (preloadedAudioRef.current) {
+      try {
+        preloadedAudioRef.current.pause();
+        preloadedAudioRef.current.src = '';
+      } catch (e) {}
+      preloadedAudioRef.current = null;
+    }
+  }, []);
+
+  // 4. Sub-hook de Sesiones
+  const {
+    sessionId,
+    sessionName,
+    sessionStatus,
+    isSessionsOpen,
+    setIsSessionsOpen,
+    sessionsList,
+    fetchSessions,
+    handleNewSession,
+    handleSwitchSession,
+    handleCreateSession,
+    handleRenameSession,
+    handleDeleteSession
+  } = useRadioSessions({
+    showConfirm,
+    currentSong,
+    setCurrentSong,
+    currentSongRef,
+    queue,
+    setQueue,
+    history,
+    setHistory,
+    playedHistoryRef,
+    chatHistory,
+    setChatHistory,
+    settings: useMemo(() => ({ frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume }), [frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume]),
+    settingsSetters: useMemo(() => ({ setFrequency, setPersonality, setCrossfade, setAutoPauseOnTabChange, setDuckingVolume }), [setFrequency, setPersonality, setCrossfade, setAutoPauseOnTabChange, setDuckingVolume])
+  });
+
+  // 5. Sub-hook de Favoritos y Repeticiones
+  const {
+    repeatCount,
+    setRepeatCount,
+    globalRepeatCount,
+    setGlobalRepeatCount,
+    isFavoritesOpen,
+    setIsFavoritesOpen,
+    favoritesList,
+    sessionFavoritesList,
+    globalFavoritesList,
+    loadingFavorites,
+    fetchFavorites,
+    isLiked,
+    setIsLiked,
+    isDisliked,
+    setIsDisliked,
+    handleLike,
+    handleDislike
+  } = useFavorites({
+    currentSong,
+    sessionId,
+    syncStatus: () => syncStatus(),
+    handleSendMessage: (e, text) => handleSendMessage(e, text),
+    onClearPreload: clearPreload
+  });
+
+  // Comparador de lista de canciones para evitar re-renders innecesarios
   const isSameTrackList = (listA, listB) => {
     if (!listA && !listB) return true;
     if (!listA || !listB) return false;
@@ -374,14 +230,59 @@ export default function useDJRadio() {
       const newStatus = data.status === 'logeado';
       setIsConnected(prev => prev !== newStatus ? newStatus : prev);
       setQueue(prev => isSameTrackList(prev, data.queue) ? prev : (data.queue || []));
-      setHistory(prev => isSameTrackList(prev, data.history) ? prev : (data.history || []));
+      if (playedHistoryRef.current.length === 0 && Array.isArray(data.history) && data.history.length > 0) {
+        const currentId = currentSongRef.current?.videoId || data.currentlyPlayingId;
+        const pastTracks = data.history.filter(s => s?.videoId && s.videoId !== currentId);
+        if (pastTracks.length > 0) {
+          playedHistoryRef.current = [...pastTracks].reverse();
+          setHistory(pastTracks);
+        }
+      }
       setQueueSource(prev => prev !== data.source ? data.source : prev);
-    } catch (e) { 
-      console.error(e); 
+    } catch (e) {
+      console.error(e);
     }
   }, []);
 
-  // --- Audio / Voice Utilities (100% Nativo en Navegador, 0 APIs Externas) ---
+  // 6. Sub-hook de MediaSession (Windows SMTC)
+  const { ensureMediaAnchor, pauseMediaAnchor } = useMediaSession({
+    currentSong,
+    playerRef,
+    isPlaying,
+    setIsPlaying,
+    handleNextRef,
+    handlePreviousRef,
+    handleNext: () => handleNextRef.current && handleNextRef.current(),
+    handlePrevious: () => handlePreviousRef.current && handlePreviousRef.current()
+  });
+
+  // Manejo de Play/Pausa
+  const handleTogglePlay = useCallback(() => {
+    ensureMediaAnchor();
+    if (!playerRef.current) return;
+    try {
+      const state = typeof playerRef.current.getPlayerState === 'function' ? playerRef.current.getPlayerState() : -1;
+      if (state === 1) {
+        playerRef.current.pauseVideo();
+        pauseMediaAnchor();
+        setIsPlaying(false);
+        if ('mediaSession' in navigator) {
+          try { navigator.mediaSession.playbackState = 'paused'; } catch (e) {}
+        }
+      } else {
+        playerRef.current.playVideo();
+        ensureMediaAnchor();
+        setIsPlaying(true);
+        if ('mediaSession' in navigator) {
+          try { navigator.mediaSession.playbackState = 'playing'; } catch (e) {}
+        }
+      }
+    } catch (err) {
+      console.error("Error al pausar/reanudar:", err);
+    }
+  }, [ensureMediaAnchor, pauseMediaAnchor]);
+
+  // Sintesis de voz del navegador (fallback)
   const speakBrowser = useCallback((text) => {
     if (!('speechSynthesis' in window) || !text) return;
     try {
@@ -390,7 +291,6 @@ export default function useDJRadio() {
       utterance.lang = 'es-ES';
       utterance.rate = 0.95;
 
-      // Usar la mejor voz en español instalada en el sistema del usuario
       const voices = window.speechSynthesis.getVoices();
       const spanishVoice = voices.find(v => v.lang.startsWith('es') && (v.name.includes('Natural') || v.name.includes('Neural') || v.name.includes('Google') || v.localService)) ||
                            voices.find(v => v.lang.startsWith('es'));
@@ -398,7 +298,6 @@ export default function useDJRadio() {
         utterance.voice = spanishVoice;
       }
 
-      // Atenuar música (audio ducking) mientras habla la voz del navegador
       const duckVol = typeof duckingVolumeRef.current === 'number' ? duckingVolumeRef.current : 20;
       if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
         playerRef.current.setVolume(duckVol);
@@ -421,12 +320,13 @@ export default function useDJRadio() {
     } catch (e) {
       console.warn("Error en síntesis nativa del navegador:", e);
     }
-  }, []);
+  }, [duckingVolumeRef]);
 
+  // Reproduccion de voz generada del DJ
   const playDJVoice = useCallback((audioUrl, text) => {
-    if (!audioUrl) { 
-      if (text) speakBrowser(text); 
-      return; 
+    if (!audioUrl) {
+      if (text) speakBrowser(text);
+      return;
     }
     const duckVol = typeof duckingVolumeRef.current === 'number' ? duckingVolumeRef.current : 20;
     if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
@@ -441,9 +341,9 @@ export default function useDJRadio() {
         playerRef.current.setVolume(100);
       }
     };
-  }, [speakBrowser]);
+  }, [speakBrowser, duckingVolumeRef]);
 
-  // Precargar siguiente canción a los últimos 30 segundos
+  // Precargar siguiente pista con anticipacion
   const preloadNextTrack = useCallback(async () => {
     if (isPreloadingRef.current || preloadedDataRef.current) return;
     isPreloadingRef.current = true;
@@ -475,7 +375,6 @@ export default function useDJRadio() {
       if (controller.signal.aborted) return;
 
       if (data.nextSong && data.nextSong.videoId) {
-        // Si el usuario eliminó esta canción con 'X' mientras cargaba la precarga, descartarla de inmediato
         if (removedVideoIdsRef.current.has(data.nextSong.videoId)) {
           console.log(`DJ Radio: El tema "${data.nextSong.title}" (${data.nextSong.videoId}) fue eliminado con X. Descartando precarga.`);
           preloadedDataRef.current = null;
@@ -505,23 +404,31 @@ export default function useDJRadio() {
         preloadAbortControllerRef.current = null;
       }
     }
-  }, []);
+  }, [sessionId, tasteProfile, selectedVoice, frequencyRef, personalityRef, selectedVoiceRef, tasteProfileRef]);
 
-  // --- Actions ---
+  // Mensajeria de usuario al DJ
   const handleSendMessage = useCallback(async (e, directText = null) => {
     if (e) e.preventDefault();
     const textToSend = directText || message.trim();
     if (!textToSend) return;
-    
-    if (isListeningRef.current) {
-      isListeningRef.current = false;
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch (err) {}
+
+    setMessage('');
+    const trimmed = textToSend.trim();
+    const isPreviousRequest = /^(?:(?:ir\s+a\s+la\s+|pon(?:me)?\s+(?:la\s+)?)?(?:canci[oó]n\s+)?(?:anterior|previa)|regresa(?:r)?|vuelve(?:\s+a\s+la\s+anterior)?|atr[aá]s)$/i.test(trimmed);
+
+    if (isPreviousRequest) {
+      if (playedHistoryRef.current.length > 0 || historyRef.current.length > 0) {
+        setChatHistory(prev => [...prev, { sender: 'user', text: textToSend }, { sender: 'dj', text: 'Regresando a la cancion anterior...' }]);
+        if (handlePreviousRef.current) {
+          handlePreviousRef.current();
+        }
+        return;
+      } else {
+        setChatHistory(prev => [...prev, { sender: 'user', text: textToSend }, { sender: 'dj', text: 'No hay canciones previas en el historial de esta sesion.' }]);
+        return;
       }
-      setIsListening(false);
     }
 
-    setMessage(''); 
     setLoading(true);
     setChatHistory(prev => [...prev, { sender: 'user', text: textToSend }]);
     
@@ -542,6 +449,14 @@ export default function useDJRadio() {
         })
       });
       const data = await response.json();
+
+      if (data.action === 'previous') {
+        if (handlePreviousRef.current) {
+          handlePreviousRef.current();
+        }
+        return;
+      }
+
       if (data.dj_comment) {
         setChatHistory(prev => [...prev, { sender: 'dj', text: data.dj_comment }]);
       }
@@ -558,6 +473,20 @@ export default function useDJRadio() {
         if (data.nextSong.globalRepeatCount !== undefined) {
           setGlobalRepeatCount(data.nextSong.globalRepeatCount);
         }
+
+        if (currentSongRef.current && currentSongRef.current.videoId !== data.nextSong.videoId) {
+          const old = currentSongRef.current;
+          const last = playedHistoryRef.current[playedHistoryRef.current.length - 1];
+          if (!last || last.videoId !== old.videoId) {
+            playedHistoryRef.current.push(old);
+            setHistory([...playedHistoryRef.current].reverse());
+          }
+        }
+
+        if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
+          playerRef.current.loadVideoById(data.nextSong.videoId);
+        }
+
         setCurrentSong(data.nextSong);
         currentSongRef.current = data.nextSong;
         syncStatus();
@@ -567,106 +496,251 @@ export default function useDJRadio() {
     } finally { 
       setLoading(false); 
     }
-  }, [message, searchType, playDJVoice, syncStatus, sessionId]);
+  }, [message, searchType, playDJVoice, syncStatus, sessionId, tasteProfile, selectedVoice, frequencyRef, personalityRef, selectedVoiceRef, tasteProfileRef, setRepeatCount, setGlobalRepeatCount]);
 
+  // Reproductor centralizado de pistas con historial
+  const playTrack = useCallback((newSong, { isBackTrack = false, isReplay = false, djVoice = null } = {}) => {
+    if (!newSong || !newSong.videoId) return;
+
+    if (!isBackTrack && currentSongRef.current && currentSongRef.current.videoId !== newSong.videoId) {
+      const old = currentSongRef.current;
+      const last = playedHistoryRef.current[playedHistoryRef.current.length - 1];
+      if (!last || last.videoId !== old.videoId) {
+        playedHistoryRef.current.push(old);
+        setHistory([...playedHistoryRef.current].reverse());
+      }
+    }
+
+    const switchNow = () => {
+      if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
+        playerRef.current.loadVideoById(newSong.videoId);
+      }
+      removedVideoIdsRef.current.clear();
+      setCurrentSong(newSong);
+      currentSongRef.current = newSong;
+      setIsPlaying(true);
+      ensureMediaAnchor();
+
+      if (djVoice && (djVoice.audioUrl || djVoice.comment)) {
+        playDJVoice(djVoice.audioUrl, djVoice.comment);
+      }
+
+      if (crossfadeRef.current && playerRef.current && typeof playerRef.current.setVolume === 'function') {
+        playerRef.current.setVolume(0);
+        let upVol = 0;
+        const targetVol = (djVoice?.audioUrl || djVoice?.comment)
+          ? (typeof duckingVolumeRef.current === 'number' ? duckingVolumeRef.current : 20)
+          : 100;
+        const fadeUp = setInterval(() => {
+          upVol = Math.min(targetVol, upVol + 25);
+          try { playerRef.current.setVolume(upVol); } catch (e) {}
+          if (upVol >= targetVol) clearInterval(fadeUp);
+        }, 120);
+      }
+
+      fetch('http://127.0.0.1:3001/api/session/transition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          song: newSong,
+          spoke: !!djVoice?.audioUrl || !!djVoice?.comment,
+          frequency: frequencyRef.current,
+          isBackTrack,
+          isReplay
+        })
+      }).catch(() => {});
+
+      syncStatus();
+    };
+
+    if (crossfadeRef.current && !isBackTrack && playerRef.current && typeof playerRef.current.setVolume === 'function') {
+      let vol = 100;
+      try { vol = playerRef.current.getVolume() || 100; } catch (e) {}
+      const fadeDown = setInterval(() => {
+        vol = Math.max(0, vol - 25);
+        try { playerRef.current.setVolume(vol); } catch (e) {}
+        if (vol <= 0) {
+          clearInterval(fadeDown);
+          switchNow();
+        }
+      }, 60);
+    } else {
+      switchNow();
+    }
+  }, [ensureMediaAnchor, playDJVoice, syncStatus, crossfadeRef, duckingVolumeRef, frequencyRef]);
+
+  // Transicion hacia la siguiente pista
+  const handleNext = useCallback(async () => {
+    ensureMediaAnchor();
+
+    const playNextWithReplayCheck = (candidateSong) => {
+      const isRewound = rewoundVideoIdsRef.current.has(candidateSong.videoId);
+      if (isRewound) {
+        rewoundVideoIdsRef.current.delete(candidateSong.videoId);
+      }
+      const isReplay = isRewound || (historyRef.current && historyRef.current.some(s => s.videoId === candidateSong.videoId));
+      playTrack(candidateSong, { isBackTrack: false, isReplay, djVoice: null });
+    };
+
+    if (queueRef.current && queueRef.current.length > 0) {
+      const nextSong = queueRef.current[0];
+      if (nextSong && nextSong.videoId && !blockedVideoIdsRef.current.has(nextSong.videoId)) {
+        setQueue(prev => prev.slice(1));
+        fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' }).catch(() => {});
+        playNextWithReplayCheck(nextSong);
+        return;
+      }
+    }
+
+    if (preloadedDataRef.current && preloadedDataRef.current.nextSong) {
+      const { nextSong } = preloadedDataRef.current;
+      preloadedDataRef.current = null;
+      preloadTriggeredRef.current = null;
+      if (nextSong && nextSong.videoId && !blockedVideoIdsRef.current.has(nextSong.videoId)) {
+        fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' }).catch(() => {});
+        playNextWithReplayCheck(nextSong);
+        return;
+      }
+    }
+
+    try {
+      const res = await fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' });
+      const nextSong = await res.json();
+      if (nextSong && nextSong.videoId && !nextSong.error && !blockedVideoIdsRef.current.has(nextSong.videoId)) {
+        playNextWithReplayCheck(nextSong);
+        return;
+      }
+    } catch (err) {
+      console.warn("Error en salto a siguiente canción:", err);
+    }
+
+    try {
+      await fetch('http://127.0.0.1:8000/queue/refill', { method: 'POST' });
+      const res2 = await fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' });
+      const nextSong2 = await res2.json();
+      if (nextSong2 && nextSong2.videoId && !nextSong2.error) {
+        playNextWithReplayCheck(nextSong2);
+        return;
+      }
+    } catch (err) {}
+  }, [ensureMediaAnchor, playTrack]);
+
+  // Cancion anterior en orden estricto
+  const handlePrevious = useCallback(async () => {
+    ensureMediaAnchor();
+
+    // Limpiar precargas pendientes al retroceder
+    preloadedDataRef.current = null;
+    preloadTriggeredRef.current = null;
+    if (preloadAbortControllerRef.current) {
+      try { preloadAbortControllerRef.current.abort(); } catch (e) {}
+      preloadAbortControllerRef.current = null;
+    }
+    if (preloadedAudioRef.current) {
+      try {
+        preloadedAudioRef.current.pause();
+        preloadedAudioRef.current.src = '';
+      } catch (e) {}
+      preloadedAudioRef.current = null;
+    }
+
+    if (playedHistoryRef.current.length === 0 && historyRef.current.length > 0) {
+      const candidates = historyRef.current.filter(s => s.videoId !== currentSongRef.current?.videoId);
+      if (candidates.length > 0) {
+        playedHistoryRef.current = [...candidates].reverse();
+      }
+    }
+
+    if (playedHistoryRef.current.length > 0) {
+      const prevSong = playedHistoryRef.current.pop();
+      const curr = currentSongRef.current;
+
+      setHistory([...playedHistoryRef.current].reverse());
+
+      if (curr && curr.videoId) {
+        // Marcamos la cancion saliente como rebobinada para que no incremente el contador si se vuelve a ella
+        rewoundVideoIdsRef.current.add(curr.videoId);
+        setQueue(prev => [curr, ...prev.filter(s => s.videoId !== curr.videoId)]);
+      }
+
+      // Notificar a Python para sincronizar queue y history en el backend inmediatamente
+      try {
+        await fetch('http://127.0.0.1:8000/queue/step_back', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            current_song: curr,
+            target_song: prevSong
+          })
+        });
+      } catch (err) {
+        console.error("Error sincronizando step_back en backend:", err);
+      }
+
+      playTrack(prevSong, { isBackTrack: true, isReplay: false, djVoice: null });
+      return;
+    }
+
+    if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+      playerRef.current.seekTo(0, true);
+      if (typeof playerRef.current.playVideo === 'function') {
+        playerRef.current.playVideo();
+      }
+      setIsPlaying(true);
+    }
+  }, [ensureMediaAnchor, playTrack]);
+
+  // Transicion ejecutada cuando una cancion termina
   const executeTransition = useCallback(() => {
-    // Si la canción ya fue precargada con anticipación a los 30s
     if (preloadedDataRef.current && preloadedDataRef.current.nextSong) {
       const { nextSong, dj_comment, audioUrl } = preloadedDataRef.current;
       preloadedDataRef.current = null;
       preloadTriggeredRef.current = null;
 
-      // Salvaguarda 1: si la canción precargada fue eliminada por el usuario con X, NUNCA reproducirla
-      if (removedVideoIdsRef.current.has(nextSong.videoId)) {
-        console.warn(`DJ Radio: La canción precargada "${nextSong.title}" (${nextSong.videoId}) fue eliminada con X. Descartando y solicitando siguiente válida.`);
-        if (preloadedAudioRef.current) {
-          try {
-            preloadedAudioRef.current.pause();
-            preloadedAudioRef.current.src = '';
-          } catch (e) {}
-          preloadedAudioRef.current = null;
-        }
-        handleSendMessage(null, "Siguiente canción DJ.");
-        return;
-      }
-
-      // Salvaguarda 2: si la canción precargada es idéntica a la actual (mismo videoId o título), descartar y avanzar
-      const cleanTitle = (t) => (t || '').replace(/[\(\[].*?[\)\]]/g, '').replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-      const curT = cleanTitle(currentSongRef.current?.title);
-      const nextT = cleanTitle(nextSong.title);
-      if (currentSongRef.current && (nextSong.videoId === currentSongRef.current.videoId || (curT && nextT && curT === nextT))) {
-        console.warn(`DJ Radio: La canción precargada "${nextSong.title}" es idéntica a la actual. Saltando para evitar repetición.`);
+      if (removedVideoIdsRef.current.has(nextSong.videoId) || 
+          (currentSongRef.current && nextSong.videoId === currentSongRef.current.videoId)) {
         fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' }).catch(() => {});
-        handleSendMessage(null, "Siguiente canción DJ.");
+        handleNext();
         return;
       }
 
       fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' }).catch(() => {});
-      fetch('http://127.0.0.1:3001/api/session/transition', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          song: nextSong,
-          spoke: !!audioUrl || !!dj_comment,
-          frequency: frequencyRef.current
-        })
-      }).catch(() => {});
 
       if (dj_comment) {
         setChatHistory(prev => [...prev, { sender: 'dj', text: dj_comment }]);
       }
 
-      const switchVideo = () => {
-        if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
-          playerRef.current.loadVideoById(nextSong.videoId);
-        }
-        removedVideoIdsRef.current.clear();
-        setCurrentSong(nextSong);
-        currentSongRef.current = nextSong;
-
-        if (audioUrl || dj_comment) {
-          playDJVoice(audioUrl, dj_comment);
-        }
-
-        // Fade up si crossfade está activo
-        if (crossfadeRef.current && playerRef.current && typeof playerRef.current.setVolume === 'function') {
-          playerRef.current.setVolume(0);
-          let upVol = 0;
-          const targetVol = (audioUrl || dj_comment)
-            ? (typeof duckingVolumeRef.current === 'number' ? duckingVolumeRef.current : 20)
-            : 100;
-          const fadeUp = setInterval(() => {
-            upVol = Math.min(targetVol, upVol + 25);
-            try { playerRef.current.setVolume(upVol); } catch (e) {}
-            if (upVol >= targetVol) clearInterval(fadeUp);
-          }, 120);
-        }
-
-        syncStatus();
-      };
-
-      // Si crossfade está activo, fade down antes de cambiar
-      if (crossfadeRef.current && playerRef.current && typeof playerRef.current.setVolume === 'function') {
-        let vol = 100;
-        try { vol = playerRef.current.getVolume() || 100; } catch (e) {}
-        const fadeDown = setInterval(() => {
-          vol = Math.max(0, vol - 25);
-          try { playerRef.current.setVolume(vol); } catch (e) {}
-          if (vol <= 0) {
-            clearInterval(fadeDown);
-            switchVideo();
-          }
-        }, 60);
-      } else {
-        switchVideo();
-      }
+      playTrack(nextSong, {
+        isBackTrack: false,
+        djVoice: (audioUrl || dj_comment) ? { audioUrl, comment: dj_comment } : null
+      });
       return;
     }
 
-    // Si no había precarga lista (ej: salto manual inmediato)
-    handleSendMessage(null, "Siguiente canción DJ.");
-  }, [handleSendMessage, playDJVoice, syncStatus]);
+    handleNext();
+  }, [handleNext, playTrack]);
 
+  // Salto de emergencia para videos bloqueados
+  const skipToNextImmediately = useCallback(async () => {
+    try {
+      console.log("[YouTube Error Handler]: Saltando de inmediato a la siguiente pista de la cola...");
+      const res = await fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' });
+      const nextSong = await res.json();
+      if (nextSong && nextSong.videoId && !blockedVideoIdsRef.current.has(nextSong.videoId)) {
+        playTrack(nextSong, { isBackTrack: false, djVoice: null });
+        return;
+      }
+    } catch (err) {
+      console.error("Error en salto rápido de canción bloqueada:", err);
+    }
+    handleNext();
+  }, [handleNext, playTrack]);
+
+  useEffect(() => {
+    skipToNextImmediatelyRef.current = skipToNextImmediately;
+  }, [skipToNextImmediately]);
+
+  // Exportar playlist a YouTube oficial
   const handleExportPlaylist = useCallback(async () => {
     try {
       const res = await fetch('http://127.0.0.1:3001/api/playlist/export', { method: 'POST' });
@@ -697,40 +771,7 @@ export default function useDJRadio() {
     }
   }, [showAlert]);
 
-  const handleNext = useCallback(() => {
-    executeTransition();
-  }, [executeTransition]);
-
-  const handlePrevious = useCallback(() => {
-    handleSendMessage(null, "DJ, pon la canción anterior.");
-  }, [handleSendMessage]);
-
-  const skipToNextImmediately = useCallback(async () => {
-    try {
-      console.log("[YouTube Error Handler]: Saltando de inmediato a la siguiente pista de la cola...");
-      const res = await fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' });
-      const nextSong = await res.json();
-      if (nextSong && nextSong.videoId && !blockedVideoIdsRef.current.has(nextSong.videoId)) {
-        setCurrentSong(nextSong);
-        currentSongRef.current = nextSong;
-        if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
-          playerRef.current.loadVideoById(nextSong.videoId);
-        }
-        syncStatus();
-        return;
-      }
-    } catch (err) {
-      console.error("Error en salto rápido de canción bloqueada:", err);
-    }
-    if (executeTransitionRef.current) {
-      executeTransitionRef.current();
-    }
-  }, [syncStatus]);
-
-  useEffect(() => {
-    skipToNextImmediatelyRef.current = skipToNextImmediately;
-  }, [skipToNextImmediately]);
-
+  // Anadir cancion manual
   const handleAddManual = useCallback(async (e) => {
     if (e) e.preventDefault();
     const trimmed = manualSearch.trim();
@@ -759,8 +800,8 @@ export default function useDJRadio() {
     }
   }, [manualSearch, syncStatus, showAlert]);
 
+  // Reordenar en cola con actualizacion optimista instantanea
   const handleMoveInQueue = useCallback(async (videoId, toIndex) => {
-    // Si se reordena la cola, la canción siguiente precargada puede ya no ser la primera
     preloadedDataRef.current = null;
     preloadTriggeredRef.current = null;
     if (preloadAbortControllerRef.current) {
@@ -768,11 +809,66 @@ export default function useDJRadio() {
       preloadAbortControllerRef.current = null;
     }
 
+    // Actualizacion optimista inmediata en la UI (0ms)
+    setQueue(prevQueue => {
+      const idx = prevQueue.findIndex(s => (s.videoId || s.id) === videoId);
+      if (idx === -1) return prevQueue;
+      const targetSong = prevQueue[idx];
+      const nextList = prevQueue.filter(s => (s.videoId || s.id) !== videoId);
+      const boundedIndex = Math.max(0, Math.min(toIndex, nextList.length));
+      nextList.splice(boundedIndex, 0, targetSong);
+      return nextList;
+    });
+
     try {
       await fetch(`http://127.0.0.1:8000/queue/move/${videoId}?to_index=${toIndex}`, { method: 'POST' });
       await syncStatus();
 
-      // Si sigue sonando y faltan <= 30s, volver a precargar el nuevo tema que quedó de primero
+      if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
+        try {
+          const state = playerRef.current.getPlayerState();
+          if (state === 1) {
+            const duration = playerRef.current.getDuration();
+            const current = playerRef.current.getCurrentTime();
+            if (duration > 35 && (duration - current) <= 30 && currentSongRef.current?.videoId) {
+              preloadTriggeredRef.current = currentSongRef.current.videoId;
+              preloadNextTrack();
+            }
+          }
+        } catch (err) {}
+      }
+    } catch (e) { 
+      console.error("Error moviendo cancion en cola:", e); 
+      await syncStatus();
+    }
+  }, [syncStatus, preloadNextTrack]);
+
+  // Eliminar de cola
+  const handleRemoveFromQueue = useCallback(async (videoId) => {
+    removedVideoIdsRef.current.add(videoId);
+
+    if (preloadedDataRef.current?.nextSong?.videoId === videoId) {
+      console.log(`DJ Radio: Canción eliminada con X (${videoId}) era la precargada. Cancelando precarga.`);
+      preloadedDataRef.current = null;
+      preloadTriggeredRef.current = null;
+      if (preloadedAudioRef.current) {
+        try {
+          preloadedAudioRef.current.pause();
+          preloadedAudioRef.current.src = '';
+        } catch (e) {}
+        preloadedAudioRef.current = null;
+      }
+    }
+
+    if (preloadAbortControllerRef.current) {
+      try { preloadAbortControllerRef.current.abort(); } catch (e) {}
+      preloadAbortControllerRef.current = null;
+    }
+
+    try {
+      await fetch(`http://127.0.0.1:8000/queue/remove/${videoId}`, { method: 'POST' });
+      await syncStatus();
+
       if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
         try {
           const state = playerRef.current.getPlayerState();
@@ -791,424 +887,14 @@ export default function useDJRadio() {
     }
   }, [syncStatus, preloadNextTrack]);
 
-  const handleRemoveFromQueue = useCallback(async (videoId) => {
-    // 1. Guardar en el set de eliminados para que ninguna precarga antigua la reproduzca
-    removedVideoIdsRef.current.add(videoId);
-
-    // 2. Si la canción eliminada coincide con la que estaba precargada, destruirla de inmediato
-    if (preloadedDataRef.current?.nextSong?.videoId === videoId) {
-      console.log(`DJ Radio: Canción eliminada con X (${videoId}) era la precargada. Cancelando precarga.`);
-      preloadedDataRef.current = null;
-      preloadTriggeredRef.current = null;
-      if (preloadedAudioRef.current) {
-        try {
-          preloadedAudioRef.current.pause();
-          preloadedAudioRef.current.src = '';
-        } catch (e) {}
-        preloadedAudioRef.current = null;
-      }
-    }
-
-    // 3. Abortar cualquier petición de precarga en vuelo que pudiera estar procesando esta canción
-    if (preloadAbortControllerRef.current) {
-      try { preloadAbortControllerRef.current.abort(); } catch (e) {}
-      preloadAbortControllerRef.current = null;
-    }
-
-    try {
-      await fetch(`http://127.0.0.1:8000/queue/remove/${videoId}`, { method: 'POST' });
-      await syncStatus();
-
-      // 4. Si la canción actual sigue sonando y faltan <= 30s, precargar de inmediato la nueva siguiente canción
-      if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
-        try {
-          const state = playerRef.current.getPlayerState();
-          if (state === 1) { // 1 = PLAYING
-            const duration = playerRef.current.getDuration();
-            const current = playerRef.current.getCurrentTime();
-            if (duration > 35 && (duration - current) <= 30 && currentSongRef.current?.videoId) {
-              preloadTriggeredRef.current = currentSongRef.current.videoId;
-              preloadNextTrack();
-            }
-          }
-        } catch (err) {}
-      }
-    } catch (e) { 
-      console.error(e); 
-    }
-  }, [syncStatus, preloadNextTrack]);
-
-  const handleLike = useCallback(async () => {
-    if (!currentSong || isLiked) return;
-    setIsLiked(true);
-    setDislikeStreak(0);
-    setRepeatCount(prev => prev + 1);
-    setGlobalRepeatCount(prev => prev + 1);
-    try {
-      const res = await fetch(`http://127.0.0.1:8000/like/${currentSong.videoId}?artist=${encodeURIComponent(currentSong.artist)}&current_title=${encodeURIComponent(currentSong.title)}&session_id=${encodeURIComponent(sessionId)}`, { 
-        method: 'POST' 
-      });
-      const data = await res.json();
-      if (data) {
-        if (data.session_repeat_count !== undefined) {
-          setRepeatCount(data.session_repeat_count);
-        } else if (data.repeat_count !== undefined) {
-          setRepeatCount(data.repeat_count);
-        }
-        if (data.global_repeat_count !== undefined) {
-          setGlobalRepeatCount(data.global_repeat_count);
-        }
-      }
-      syncStatus();
-    } catch (e) { 
-      setIsLiked(false); 
-      setRepeatCount(prev => Math.max(0, prev - 1));
-      setGlobalRepeatCount(prev => Math.max(0, prev - 1));
-      console.error(e); 
-    }
-  }, [currentSong, isLiked, sessionId, syncStatus]);
-
-  const handleDislike = useCallback(async () => {
-    if (!currentSong || isDisliked) return;
-    setIsDisliked(true);
-    const newStreak = dislikeStreak + 1;
-    setDislikeStreak(newStreak);
-
-    // 1. Limpiar precargas previas de la canción descartada
-    preloadedDataRef.current = null;
-    preloadTriggeredRef.current = null;
-    if (preloadedAudioRef.current) {
-      try {
-        preloadedAudioRef.current.pause();
-        preloadedAudioRef.current.src = '';
-      } catch (e) {}
-      preloadedAudioRef.current = null;
-    }
-
-    try {
-      // 2. Registrar el dislike en el servicio de música (YT Music rate_song DISLIKE y cola renovada)
-      await fetch(`http://127.0.0.1:8000/dislike/${currentSong.videoId}?artist=${encodeURIComponent(currentSong.artist)}`, { 
-        method: 'POST' 
-      });
-
-      // 3. Saltar de inmediato a la siguiente canción sin demoras
-      if (newStreak >= 3) {
-        handleSendMessage(null, "He dado dislike a varias canciones seguidas. DJ, cambia totalmente de estilo y recomiéndame algo diferente.");
-        setDislikeStreak(0);
-      } else {
-        handleSendMessage(null, "He dado dislike. Siguiente canción DJ.");
-      }
-    } catch (e) { 
-      setIsDisliked(false); 
-      console.error(e); 
-    }
-  }, [currentSong, isDisliked, dislikeStreak, handleSendMessage]);
-
-  const toggleListening = useCallback(() => {
-    // Opera y Opera GX no tienen servidores de backend para Web Speech API
-    const isOpera = (!!window.opr && !!window.opr.addons) || !!window.opera || navigator.userAgent.indexOf(' OPR/') >= 0;
-    if (isOpera) {
-      showAlert({
-        title: "Navegador no compatible",
-        message: "Opera y Opera GX no cuentan con servidores para transcribir voz a texto (Web Speech API).\n\nPor favor, abre la aplicación en Google Chrome o Microsoft Edge para usar el micrófono.",
-        type: "warning"
-      });
-      return;
-    }
-
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      showAlert({
-        title: "Reconocimiento no disponible",
-        message: "Tu navegador no soporta reconocimiento de voz nativo. Por favor usa Google Chrome o Microsoft Edge.",
-        type: "warning"
-      });
-      return;
-    }
-
-    // Si ya está escuchando, detener limpiamente
-    if (isListeningRef.current) {
-      isListeningRef.current = false;
-      setIsListening(false);
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (err) {
-          try { recognitionRef.current.abort(); } catch (e) {}
-        }
-        recognitionRef.current = null;
-      }
-      return;
-    }
-
-    // Limpiar cualquier instancia huérfana previa
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch (e) {}
-      recognitionRef.current = null;
-    }
-
-    // Guardar texto existente para añadir la voz sin borrar lo que ya escribió el usuario
-    initialTextRef.current = messageRef.current ? messageRef.current.trim() : '';
-
-    // Activar estado de escucha
-    isListeningRef.current = true;
-    setIsListening(true);
-
-    // Determinar idioma con máxima compatibilidad
-    let speechLang = 'es-ES';
-    const navLang = navigator.language || '';
-    if (navLang) {
-      speechLang = navLang.toLowerCase() === 'es' ? 'es-ES' : navLang;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = speechLang;
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
-
-    recognition.onstart = () => {
-      console.log("[Mic]: Escuchando activamente en:", speechLang);
-    };
-
-    // Actualizar en tiempo real el input del chat a medida que habla el usuario
-    recognition.onresult = (event) => {
-      let interimTranscript = '';
-      let finalTranscript = '';
-
-      for (let i = 0; i < event.results.length; i++) {
-        const item = event.results[i];
-        if (item && item[0] && item[0].transcript) {
-          if (item.isFinal) {
-            finalTranscript += item[0].transcript;
-          } else {
-            interimTranscript += item[0].transcript;
-          }
-        }
-      }
-
-      const spokenText = (finalTranscript + interimTranscript).trim();
-      console.log("[Mic LIVE]:", spokenText);
-      if (spokenText) {
-        const prefix = initialTextRef.current ? `${initialTextRef.current} ` : '';
-        setMessage(prefix + spokenText);
-      }
-    };
-
-    recognition.onerror = (event) => {
-      console.warn("[Mic Error]:", event.error);
-      if (event.error === 'no-speech' || event.error === 'aborted') {
-        return;
-      }
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        showAlert({
-          title: "Permiso Denegado",
-          message: "Permiso de micrófono denegado. Permítelo en el icono de candado o permisos junto a la URL en tu navegador.",
-          type: "warning"
-        });
-      } else if (event.error === 'network') {
-        showAlert({
-          title: "Error de Conexión de Voz",
-          message: "Error de conexión con el servicio de voz. Si usas Brave o un bloqueador de anuncios, habilita los servicios de voz de Google en Configuración o prueba en Google Chrome / Microsoft Edge.",
-          type: "warning"
-        });
-      } else if (event.error === 'audio-capture') {
-        showAlert({
-          title: "Micrófono no Detectado",
-          message: "No se detectó audio del micrófono. Comprueba tu micrófono en la configuración de sonido del sistema.",
-          type: "warning"
-        });
-      }
-      isListeningRef.current = false;
-      setIsListening(false);
-      recognitionRef.current = null;
-    };
-
-    recognition.onend = () => {
-      console.log("[Mic]: Fin de sesión de micrófono");
-      isListeningRef.current = false;
-      setIsListening(false);
-      recognitionRef.current = null;
-    };
-
-    recognitionRef.current = recognition;
-
-    try {
-      recognition.start();
-    } catch (err) {
-      console.error("[Mic Start Error]:", err);
-      isListeningRef.current = false;
-      setIsListening(false);
-      recognitionRef.current = null;
-    }
-  }, [showAlert]);
-
-  // Cleanup de reconocimiento de voz al desmontar
-  useEffect(() => {
-    return () => {
-      isListeningRef.current = false;
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch (e) {}
-      }
-    };
-  }, []);
-
-  // Periódico de sincronización de estado
+  // Polling de sincronizacion de estado
   useEffect(() => {
     syncStatus();
     const interval = setInterval(syncStatus, 5000);
     return () => clearInterval(interval);
   }, [syncStatus]);
 
-  // Restauración de sesión desde PostgreSQL (o localStorage como respaldo)
-  useEffect(() => {
-    let isMounted = true;
-
-    const restoreSession = async () => {
-      try {
-        const res = await fetch('http://127.0.0.1:3001/api/session/current');
-        const data = await res.json();
-
-        if (!isMounted) return;
-
-        if (data && data.exists && data.session) {
-          const s = data.session;
-          if (s.id) {
-            setSessionId(s.id);
-            localStorage.setItem('dj_session_id', s.id);
-          }
-          if (s.name) setSessionName(s.name);
-          if (s.current_song && s.current_song.videoId) {
-            setCurrentSong(s.current_song);
-            currentSongRef.current = s.current_song;
-          }
-          if (Array.isArray(s.queue) && s.queue.length > 0) {
-            setQueue(s.queue);
-          }
-          if (Array.isArray(s.history) && s.history.length > 0) {
-            setHistory(s.history);
-          }
-          if (Array.isArray(s.chat_history) && s.chat_history.length > 0) {
-            setChatHistory(s.chat_history);
-          }
-          if (s.settings) {
-            if (s.settings.frequency !== undefined) setFrequency(s.settings.frequency);
-            if (s.settings.personality) setPersonality(s.settings.personality);
-            if (s.settings.crossfade !== undefined) setCrossfade(s.settings.crossfade);
-            if (s.settings.autoPauseOnTabChange !== undefined) setAutoPauseOnTabChange(s.settings.autoPauseOnTabChange);
-            if (s.settings.duckingVolume !== undefined) setDuckingVolume(s.settings.duckingVolume);
-          }
-          setSessionStatus('restored');
-          console.log('[SESIÓN] Sesión restaurada con éxito desde la Base de Datos.');
-        } else {
-          // Fallback a localStorage si la BD aún no tiene sesión guardada
-          const backup = localStorage.getItem('dj_session_backup');
-          if (backup) {
-            try {
-              const parsed = JSON.parse(backup);
-              if (parsed.currentSong) setCurrentSong(parsed.currentSong);
-              if (parsed.queue) setQueue(parsed.queue);
-              if (parsed.history) setHistory(parsed.history);
-              if (parsed.chatHistory) setChatHistory(parsed.chatHistory);
-              console.log('[SESIÓN] Sesión restaurada desde copia local de respaldo.');
-            } catch (e) {}
-          }
-        }
-      } catch (err) {
-        console.warn('No se pudo conectar con el servidor para restaurar sesión, recurriendo a caché local:', err);
-        const backup = localStorage.getItem('dj_session_backup');
-        if (backup) {
-          try {
-            const parsed = JSON.parse(backup);
-            if (parsed.currentSong) setCurrentSong(parsed.currentSong);
-            if (parsed.queue) setQueue(parsed.queue);
-            if (parsed.history) setHistory(parsed.history);
-            if (parsed.chatHistory) setChatHistory(parsed.chatHistory);
-          } catch (e) {}
-        }
-      } finally {
-        setTimeout(() => {
-          isRestoringSessionRef.current = false;
-        }, 1200);
-        fetchSessions();
-      }
-    };
-
-    restoreSession();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [fetchSessions]);
-
-  // Recargar sesiones al abrir el panel lateral
-  useEffect(() => {
-    if (isSessionsOpen) {
-      fetchSessions();
-    }
-  }, [isSessionsOpen, fetchSessions]);
-
-  // Autoguardado con debounce (1.5 segundos) hacia PostgreSQL y localStorage
-  useEffect(() => {
-    if (isRestoringSessionRef.current) return;
-    if (!currentSong && queue.length === 0 && history.length === 0 && chatHistory.length <= 1) return;
-
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-
-    setSessionStatus('saving');
-
-    saveTimeoutRef.current = setTimeout(async () => {
-      const payload = {
-        id: sessionId,
-        name: sessionName,
-        current_song: currentSong,
-        queue,
-        history,
-        chat_history: chatHistory,
-        settings: {
-          frequency,
-          personality,
-          crossfade,
-          autoPauseOnTabChange,
-          duckingVolume
-        }
-      };
-
-      // Respaldo inmediato en localStorage
-      try {
-        localStorage.setItem('dj_session_backup', JSON.stringify({
-          currentSong,
-          queue,
-          history,
-          chatHistory
-        }));
-      } catch (e) {}
-
-      // Guardado en PostgreSQL
-      try {
-        const res = await fetch('http://127.0.0.1:3001/api/session/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (data && data.success) {
-          setSessionStatus('saved');
-        } else {
-          setSessionStatus('error');
-        }
-      } catch (err) {
-        console.warn('Error en autoguardado de sesión en BD:', err);
-        setSessionStatus('error');
-      }
-    }, 1500);
-
-    return () => {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    };
-  }, [currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume, sessionId, sessionName]);
-
-  // Inyección de YouTube Iframe API Script
+  // Inyeccion de YouTube Iframe API Script
   useEffect(() => {
     if (!window.YT) {
       const tag = document.createElement('script');
@@ -1217,13 +903,14 @@ export default function useDJRadio() {
     }
   }, []);
 
-  // Sincronizar la ref de handleNext y executeTransition
+  // Sincronizar referencias para MediaSession y callbacks asincronos
   useEffect(() => {
-    handleNextRef.current = executeTransition;
+    handleNextRef.current = handleNext;
     executeTransitionRef.current = executeTransition;
-  }, [executeTransition]);
+    handlePreviousRef.current = handlePrevious;
+  }, [handleNext, executeTransition, handlePrevious]);
 
-  // Inicialización del reproductor único de YouTube
+  // Inicializacion del reproductor unico de YouTube
   useEffect(() => {
     let checkInterval = null;
 
@@ -1237,12 +924,18 @@ export default function useDJRadio() {
           playerVars: { autoplay: 1, origin: window.location.origin, playsinline: 1 },
           events: {
             onStateChange: (e) => {
-              // e.data === 0 significa fin natural de la canción
-              if (e.data === 0 && executeTransitionRef.current) {
-                executeTransitionRef.current();
+              if (e.data === 0) {
+                setIsPlaying(false);
+                if (executeTransitionRef.current) {
+                  executeTransitionRef.current();
+                }
               }
-              // e.data === 1 significa reproducción activa exitosa
               if (e.data === 1) {
+                setIsPlaying(true);
+                ensureMediaAnchor();
+                if ('mediaSession' in navigator) {
+                  try { navigator.mediaSession.playbackState = 'playing'; } catch (err) {}
+                }
                 if (currentSongRef.current?.title) {
                   const cleanT = (currentSongRef.current.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
                   fallbackAttemptsRef.current.delete(cleanT);
@@ -1256,9 +949,15 @@ export default function useDJRadio() {
                   } catch (err) {}
                 }
               }
-              // e.data === 2 significa pausado en la pestaña visible por el usuario
-              if (e.data === 2 && !document.hidden) {
-                wasPlayingBeforeAutoPauseRef.current = false;
+              if (e.data === 2) {
+                setIsPlaying(false);
+                pauseMediaAnchor();
+                if ('mediaSession' in navigator) {
+                  try { navigator.mediaSession.playbackState = 'paused'; } catch (err) {}
+                }
+                if (!document.hidden) {
+                  wasPlayingBeforeAutoPauseRef.current = false;
+                }
               }
             },
             onError: async (e) => {
@@ -1276,7 +975,6 @@ export default function useDJRadio() {
 
               const attempts = fallbackAttemptsRef.current.get(cleanT) || 0;
 
-              // Solo intentar 1 versión alternativa por canción para evitar bucle
               if (failedId && attempts === 0 && songTitle) {
                 fallbackAttemptsRef.current.set(cleanT, 1);
                 try {
@@ -1297,7 +995,6 @@ export default function useDJRadio() {
                 }
               }
 
-              // Si falló el fallback o ya se intentó para esta canción, saltar de inmediato a una nueva canción de la cola
               console.warn(`[YouTube Error]: Video bloqueado por derechos o no reproducible (${errorCode}). Saltando inmediatamente a la siguiente pista de la cola.`);
               if (skipToNextImmediatelyRef.current) {
                 await skipToNextImmediatelyRef.current();
@@ -1323,20 +1020,16 @@ export default function useDJRadio() {
     return () => {
       if (checkInterval) clearInterval(checkInterval);
     };
-  }, []);
+  }, [ensureMediaAnchor, pauseMediaAnchor, broadcastChannelRef, tabIdRef, wasPlayingBeforeAutoPauseRef]);
 
-  // Pausa y reanudación automática al cambiar de pestaña o ventana
+  // Auto-pausa al cambiar de pestaña
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!autoPauseOnTabChangeRef.current) return;
 
       if (document.hidden) {
-        // 1. Pausar YouTube si está en reproducción activa o cargando
         try {
-          if (
-            playerRef.current &&
-            typeof playerRef.current.getPlayerState === 'function'
-          ) {
+          if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
             const state = playerRef.current.getPlayerState();
             if (state === 1 || state === 3) {
               wasPlayingBeforeAutoPauseRef.current = true;
@@ -1347,7 +1040,6 @@ export default function useDJRadio() {
           console.warn('Error al pausar video en segundo plano:', e);
         }
 
-        // 2. Pausar locución del DJ si está sonando
         try {
           if (
             audioPlayerRef.current &&
@@ -1362,22 +1054,13 @@ export default function useDJRadio() {
           console.warn('Error al pausar audio DJ en segundo plano:', e);
         }
 
-        // 3. Pausar voz del navegador (SpeechSynthesis) si está activa
         try {
-          if (
-            typeof window !== 'undefined' &&
-            'speechSynthesis' in window &&
-            window.speechSynthesis.speaking &&
-            !window.speechSynthesis.paused
-          ) {
+          if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
             wasSpeechSpeakingBeforeAutoPauseRef.current = true;
             window.speechSynthesis.pause();
           }
-        } catch (e) {
-          console.warn('Error al pausar voz del navegador en segundo plano:', e);
-        }
+        } catch (e) {}
       } else {
-        // Regreso a la pestaña: reanudar si estaba activo antes del cambio
         if (wasPlayingBeforeAutoPauseRef.current) {
           wasPlayingBeforeAutoPauseRef.current = false;
           try {
@@ -1385,82 +1068,75 @@ export default function useDJRadio() {
               playerRef.current.playVideo();
             }
           } catch (e) {
-            console.warn('Error al reanudar video al regresar:', e);
+            console.warn('Error al reanudar video tras volver a pestaña:', e);
           }
         }
 
         if (wasDJSpeakingBeforeAutoPauseRef.current) {
           wasDJSpeakingBeforeAutoPauseRef.current = false;
           try {
-            if (audioPlayerRef.current) {
+            if (audioPlayerRef.current && audioPlayerRef.current.paused) {
               audioPlayerRef.current.play().catch(() => {});
             }
-          } catch (e) {
-            console.warn('Error al reanudar locución DJ al regresar:', e);
-          }
+          } catch (e) {}
         }
 
         if (wasSpeechSpeakingBeforeAutoPauseRef.current) {
           wasSpeechSpeakingBeforeAutoPauseRef.current = false;
           try {
-            if (
-              typeof window !== 'undefined' &&
-              'speechSynthesis' in window &&
-              window.speechSynthesis.paused
-            ) {
+            if ('speechSynthesis' in window && window.speechSynthesis.paused) {
               window.speechSynthesis.resume();
             }
-          } catch (e) {
-            console.warn('Error al reanudar voz del navegador al regresar:', e);
-          }
+          } catch (e) {}
         }
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [autoPauseOnTabChangeRef, wasPlayingBeforeAutoPauseRef, wasDJSpeakingBeforeAutoPauseRef, wasSpeechSpeakingBeforeAutoPauseRef]);
 
-    // Coordinación multi-pestaña para evitar doble reproducción
+  // BroadcastChannel entre pestanas
+  useEffect(() => {
     try {
-      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-        const channel = new BroadcastChannel('gemini_dj_radio_sync');
+      if ('BroadcastChannel' in window) {
+        const channel = new BroadcastChannel('gemini_radio_tabs');
         broadcastChannelRef.current = channel;
 
         channel.onmessage = (event) => {
-          if (!autoPauseOnTabChangeRef.current) return;
-          if (event.data?.type === 'PLAYING_ANOTHER_TAB' && event.data?.tabId !== tabIdRef.current) {
-            if (
-              playerRef.current &&
-              typeof playerRef.current.getPlayerState === 'function' &&
-              playerRef.current.getPlayerState() === 1
-            ) {
-              wasPlayingBeforeAutoPauseRef.current = true;
-              playerRef.current.pauseVideo();
-            }
-            if (audioPlayerRef.current && !audioPlayerRef.current.paused) {
-              wasDJSpeakingBeforeAutoPauseRef.current = true;
-              audioPlayerRef.current.pause();
+          if (!event?.data) return;
+          const { type, tabId } = event.data;
+          if (type === 'PLAYING_ANOTHER_TAB' && tabId !== tabIdRef.current) {
+            if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
+              try {
+                const state = playerRef.current.getPlayerState();
+                if (state === 1) {
+                  playerRef.current.pauseVideo();
+                  pauseMediaAnchor();
+                  setIsPlaying(false);
+                }
+              } catch (e) {}
             }
           }
         };
-      }
-    } catch (e) {
-      console.warn('BroadcastChannel no disponible:', e);
-    }
 
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      if (broadcastChannelRef.current) {
-        broadcastChannelRef.current.close();
-        broadcastChannelRef.current = null;
+        return () => {
+          try { channel.close(); } catch (e) {}
+          broadcastChannelRef.current = null;
+        };
       }
-    };
-  }, []);
+    } catch (e) {}
+  }, [pauseMediaAnchor, broadcastChannelRef, tabIdRef]);
 
-  // Cargar video en el reproductor cuando cambia currentSong
+  // Sincronizacion de reproduccion al cambiar cancion actual
   useEffect(() => {
     if (!currentSong?.videoId) {
-      setRepeatCount(0);
-      setGlobalRepeatCount(0);
+      if (playerRef.current && typeof playerRef.current.stopVideo === 'function') {
+        playerRef.current.stopVideo();
+      }
+      setIsPlaying(false);
       return;
     }
     currentSongRef.current = currentSong;
@@ -1469,10 +1145,8 @@ export default function useDJRadio() {
     preloadTriggeredRef.current = null;
     preloadedDataRef.current = null;
 
-    // Sincronizar automáticamente con el historial oficial de la cuenta de YouTube
     fetch(`http://127.0.0.1:8000/history/record/${currentSong.videoId}`, { method: 'POST' }).catch(() => {});
 
-    // Consultar contadores de repetición al backend (por estación y global)
     fetch(`http://127.0.0.1:3001/api/favorites/count/${currentSong.videoId}?session_id=${encodeURIComponent(sessionId)}`)
       .then(res => res.json())
       .then(data => {
@@ -1508,9 +1182,9 @@ export default function useDJRadio() {
       }, 800);
       return () => clearTimeout(retryTimer);
     }
-  }, [currentSong?.videoId, sessionId]);
+  }, [currentSong?.videoId, sessionId, setRepeatCount, setGlobalRepeatCount, setIsLiked, setIsDisliked]);
 
-  // Ticker de monitoreo para precargar a los últimos 30 segundos
+  // Ticker de monitoreo para precargar temas y sincronizar SMTC
   useEffect(() => {
     const timer = setInterval(() => {
       if (
@@ -1523,11 +1197,22 @@ export default function useDJRadio() {
 
       try {
         const state = playerRef.current.getPlayerState();
-        if (state === 1) { // 1 = PLAYING
+        if (state === 1) {
+          ensureMediaAnchor();
           const duration = playerRef.current.getDuration();
           const current = playerRef.current.getCurrentTime();
+
+          if ('mediaSession' in navigator && 'setPositionState' in navigator.mediaSession && duration > 0) {
+            try {
+              navigator.mediaSession.setPositionState({
+                duration: Math.max(duration, 0),
+                playbackRate: 1,
+                position: Math.min(Math.max(0, current), duration)
+              });
+            } catch (e) {}
+          }
+
           const remaining = duration - current;
-          // Precarga anticipada: 50 segundos antes (o al 40% si la canción dura menos de 65s)
           const preloadThreshold = duration > 65 ? 50 : Math.max(15, Math.floor(duration * 0.4));
 
           if (
@@ -1542,323 +1227,16 @@ export default function useDJRadio() {
             preloadNextTrack();
           }
         }
-      } catch (err) {
-        // Ignorar si el reproductor aún está cargando
-      }
+      } catch (err) {}
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [preloadNextTrack]);
-
-  // Teclas multimedia y shortcuts de teclado
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-      
-      // Siguiente
-      if (e.key === 'MediaTrackNext' || (e.ctrlKey && e.key === 'ArrowRight')) {
-        handleNext();
-      }
-      // Anterior
-      if (e.key === 'MediaTrackPrevious' || (e.ctrlKey && e.key === 'ArrowLeft')) {
-        handlePrevious();
-      }
-    };
-
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.setActionHandler('nexttrack', handleNext);
-      navigator.mediaSession.setActionHandler('previoustrack', handlePrevious);
-    }
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.setActionHandler('nexttrack', null);
-        navigator.mediaSession.setActionHandler('previoustrack', null);
-      }
-    };
-  }, [handleNext, handlePrevious]);
+  }, [preloadNextTrack, ensureMediaAnchor]);
 
   // Auto-scroll del chat
   useEffect(() => { 
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); 
   }, [chatHistory]);
-
-  // Curiosidades de la canción y el artista
-  const handleOpenTrivia = useCallback(async (isRefresh = false) => {
-    if (!currentSong?.videoId) return;
-
-    setIsTriviaOpen(true);
-
-    if (!isRefresh && triviaCacheRef.current.has(currentSong.videoId)) {
-      setCurrentTrivia(triviaCacheRef.current.get(currentSong.videoId));
-      return;
-    }
-
-    setLoadingTrivia(true);
-
-    try {
-      const params = new URLSearchParams();
-      if (currentSong.title) params.append('title', currentSong.title);
-      if (currentSong.artist) params.append('artist', currentSong.artist);
-      if (isRefresh) params.append('refresh', 'true');
-
-      const res = await fetch(`http://127.0.0.1:3001/api/trivia/${currentSong.videoId}?${params.toString()}`);
-      const data = await res.json();
-      if (data && data.trivia) {
-        triviaCacheRef.current.set(currentSong.videoId, data.trivia);
-        setCurrentTrivia(data.trivia);
-      } else {
-        setCurrentTrivia('No se encontró información curiosa para este tema.');
-      }
-    } catch (err) {
-      console.error('Error cargando curiosidades:', err);
-      setCurrentTrivia('No se pudo cargar la curiosidad en este momento.');
-    } finally {
-      setLoadingTrivia(false);
-    }
-  }, [currentSong]);
-
-  const handleAnotherTrivia = useCallback(() => {
-    handleOpenTrivia(true);
-  }, [handleOpenTrivia]);
-
-  const handleAskDJMore = useCallback(() => {
-    if (!currentSong) return;
-    setIsTriviaOpen(false);
-    const askText = `Cuéntame más curiosidades sobre ${currentSong.title} de ${currentSong.artist}.`;
-    setMessage(askText);
-  }, [currentSong]);
-
-  const handleShareTriviaToChat = useCallback(() => {
-    if (!currentTrivia || !currentSong) return;
-    setIsTriviaOpen(false);
-    setChatHistory(prev => [
-      ...prev,
-      { 
-        sender: 'dj', 
-        text: `✨ Curiosidad sobre "${currentSong.title}" (${currentSong.artist}):\n${currentTrivia}` 
-      }
-    ]);
-  }, [currentTrivia, currentSong]);
-
-  const handleNewSession = useCallback(async () => {
-    const confirmed = await showConfirm({
-      title: "Comenzar Nueva Sesión",
-      message: "¿Deseas comenzar una nueva sesión de radio?\nLa sesión actual quedará guardada de forma segura en la base de datos.",
-      confirmText: "Comenzar nueva",
-      cancelText: "Cancelar",
-      type: "warning"
-    });
-    if (!confirmed) return;
-
-    try {
-      const nowStr = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-      const res = await fetch('http://127.0.0.1:3001/api/session/reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `Sesión de Radio (${nowStr})` })
-      });
-      const data = await res.json();
-      if (data && data.new_session_id) {
-        setSessionId(data.new_session_id);
-        localStorage.setItem('dj_session_id', data.new_session_id);
-        if (data.name) setSessionName(data.name);
-      }
-    } catch (e) {
-      const localNewId = `session_${Date.now()}`;
-      setSessionId(localNewId);
-      localStorage.setItem('dj_session_id', localNewId);
-    }
-
-    setCurrentSong(null);
-    currentSongRef.current = null;
-    setQueue([]);
-    setHistory([]);
-    setChatHistory([
-      { sender: 'dj', text: '¡Qué onda mucha! Comenzamos una nueva sesión en Gemini Radio. ¿Qué te pongo hoy?' }
-    ]);
-    localStorage.removeItem('dj_session_backup');
-    if (playerRef.current && typeof playerRef.current.stopVideo === 'function') {
-      playerRef.current.stopVideo();
-    }
-    setSessionStatus('saved');
-    fetchSessions();
-  }, [fetchSessions]);
-
-  const handleSwitchSession = useCallback(async (targetId) => {
-    if (!targetId || targetId === sessionId) return;
-
-    // Guardar sesión actual antes de cambiar si tiene contenido
-    if (currentSong || queue.length > 0 || history.length > 0 || chatHistory.length > 1) {
-      try {
-        await fetch('http://127.0.0.1:3001/api/session/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: sessionId,
-            name: sessionName,
-            current_song: currentSong,
-            queue,
-            history,
-            chat_history: chatHistory,
-            settings: { frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume }
-          })
-        });
-      } catch (e) {
-        console.warn("Error guardando sesión previa al cambiar:", e);
-      }
-    }
-
-    try {
-      setSessionStatus('saving');
-      const res = await fetch('http://127.0.0.1:3001/api/session/load', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: targetId })
-      });
-      const data = await res.json();
-
-      if (data && data.success && data.session) {
-        const s = data.session;
-        setSessionId(s.id);
-        localStorage.setItem('dj_session_id', s.id);
-        setSessionName(s.name || 'Sesión de Radio');
-        
-        setCurrentSong(s.current_song || null);
-        currentSongRef.current = s.current_song || null;
-        if (s.current_song?.videoId && playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
-          playerRef.current.loadVideoById(s.current_song.videoId);
-        } else if (!s.current_song?.videoId && playerRef.current && typeof playerRef.current.stopVideo === 'function') {
-          playerRef.current.stopVideo();
-        }
-        setQueue(Array.isArray(s.queue) ? s.queue : []);
-        setHistory(Array.isArray(s.history) ? s.history : []);
-        setChatHistory(Array.isArray(s.chat_history) && s.chat_history.length > 0 ? s.chat_history : [
-          { sender: 'dj', text: `¡Qué onda! Sintonizando "${s.name}". ¿Qué rolita te gustaría escuchar aquí?` }
-        ]);
-
-        if (s.settings) {
-          if (s.settings.frequency !== undefined) setFrequency(s.settings.frequency);
-          if (s.settings.personality) setPersonality(s.settings.personality);
-          if (s.settings.crossfade !== undefined) setCrossfade(s.settings.crossfade);
-          if (s.settings.autoPauseOnTabChange !== undefined) setAutoPauseOnTabChange(s.settings.autoPauseOnTabChange);
-          if (s.settings.duckingVolume !== undefined) setDuckingVolume(s.settings.duckingVolume);
-        }
-
-        setSessionStatus('restored');
-        setIsSessionsOpen(false);
-        fetchSessions();
-      }
-    } catch (err) {
-      console.error("Error al conmutar sesión:", err);
-      setSessionStatus('error');
-    }
-  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume, fetchSessions]);
-
-  const handleCreateSession = useCallback(async (customName) => {
-    const name = (customName || '').trim() || 'Nueva Estación';
-
-    // Guardar sesión actual antes de crear
-    if (currentSong || queue.length > 0 || history.length > 0) {
-      try {
-        await fetch('http://127.0.0.1:3001/api/session/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: sessionId,
-            name: sessionName,
-            current_song: currentSong,
-            queue,
-            history,
-            chat_history: chatHistory,
-            settings: { frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume }
-          })
-        });
-      } catch (e) {}
-    }
-
-    try {
-      setSessionStatus('saving');
-      const res = await fetch('http://127.0.0.1:3001/api/session/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
-      const data = await res.json();
-
-      if (data && data.success && data.session) {
-        const s = data.session;
-        setSessionId(s.id);
-        localStorage.setItem('dj_session_id', s.id);
-        setSessionName(s.name);
-        setCurrentSong(null);
-        currentSongRef.current = null;
-        setQueue([]);
-        setHistory([]);
-        setChatHistory(s.chat_history || [
-          { sender: 'dj', text: `¡Qué onda! Esta es tu estación '${s.name}'. ¿Qué rola ponemos para estrenarla?` }
-        ]);
-        if (playerRef.current && typeof playerRef.current.stopVideo === 'function') {
-          playerRef.current.stopVideo();
-        }
-        setSessionStatus('saved');
-        setIsSessionsOpen(false);
-        fetchSessions();
-      }
-    } catch (err) {
-      console.error("Error creando nueva sesión:", err);
-      setSessionStatus('error');
-    }
-  }, [sessionId, sessionName, currentSong, queue, history, chatHistory, frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume, fetchSessions]);
-
-  const handleRenameSession = useCallback(async (id, newName) => {
-    if (!id || !newName.trim()) return;
-    try {
-      const res = await fetch(`http://127.0.0.1:3001/api/session/${id}/rename`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim() })
-      });
-      const data = await res.json();
-      if (data && data.success) {
-        if (id === sessionId) {
-          setSessionName(newName.trim());
-        }
-        fetchSessions();
-      }
-    } catch (err) {
-      console.error("Error renombrando sesión:", err);
-    }
-  }, [sessionId, fetchSessions]);
-
-  const handleDeleteSession = useCallback(async (id) => {
-    if (!id) return;
-    try {
-      const res = await fetch(`http://127.0.0.1:3001/api/session/${id}`, {
-        method: 'DELETE'
-      });
-      const data = await res.json();
-
-      if (data && data.success) {
-        if (data.was_active && data.active_session) {
-          const s = data.active_session;
-          setSessionId(s.id);
-          localStorage.setItem('dj_session_id', s.id);
-          setSessionName(s.name);
-          setCurrentSong(s.current_song || null);
-          currentSongRef.current = s.current_song || null;
-          setQueue(s.queue || []);
-          setHistory(s.history || []);
-          setChatHistory(s.chat_history || []);
-        }
-        fetchSessions();
-      }
-    } catch (err) {
-      console.error("Error eliminando sesión:", err);
-    }
-  }, [fetchSessions]);
 
   return {
     message,
@@ -1888,6 +1266,8 @@ export default function useDJRadio() {
     handleSendMessage,
     handleNext,
     handlePrevious,
+    isPlaying,
+    handleTogglePlay,
     handleLike,
     handleDislike,
     chatEndRef,
@@ -1915,8 +1295,8 @@ export default function useDJRadio() {
     handleShareTriviaToChat,
     handleExportPlaylist,
     sessionId,
-    sessionName,
     sessionStatus,
+    sessionName,
     handleNewSession,
     isSessionsOpen,
     setIsSessionsOpen,
@@ -1931,7 +1311,6 @@ export default function useDJRadio() {
     showConfirm,
     showAlert,
     playerRef,
-    // Favoritos en repetición
     repeatCount,
     setRepeatCount,
     globalRepeatCount,
@@ -1943,14 +1322,12 @@ export default function useDJRadio() {
     globalFavoritesList,
     loadingFavorites,
     fetchFavorites,
-    // Perfil y Gustos Musicales
     tasteProfile,
     isTasteModalOpen,
     setIsTasteModalOpen,
     loadingTasteProfile,
     fetchTasteProfile,
     saveTasteProfile,
-    // Voz del Locutor
     selectedVoice,
     setSelectedVoice,
     playingPreviewVoiceId,

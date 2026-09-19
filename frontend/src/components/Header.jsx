@@ -15,7 +15,7 @@ export default function Header({
     <header className="header">
       <div className="header-content">
         <Radio className="logo-icon" size={28} />
-        <h1>Gemini Radio AI</h1>
+        <h1 className="header-title">IADJ</h1>
       </div>
       
       <div className="header-actions">

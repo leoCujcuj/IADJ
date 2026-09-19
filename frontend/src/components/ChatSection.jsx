@@ -67,9 +67,10 @@ export default function ChatSection({
           type="button" 
           className={`mic-btn ${isListening ? 'listening' : ''}`} 
           onClick={toggleListening}
-          title={isListening ? "Detener micrófono" : "Hablar"}
+          title={isListening ? "Detener microfono" : "Hablar con el DJ"}
+          aria-label={isListening ? "Detener microfono" : "Hablar con el DJ"}
         >
-          {isListening ? <MicOff size={20} /> : <Mic size={20} />}
+          {isListening ? <MicOff size={19} /> : <Mic size={19} />}
         </button>
         <input 
           type="text" 
@@ -80,7 +81,7 @@ export default function ChatSection({
             }
             setMessage(e.target.value);
           }} 
-          placeholder={isListening ? "🎤 Escuchando... habla ahora..." : `Pedir ${activeMode?.placeholder || 'canción'}...`} 
+          placeholder={isListening ? "Escuchando... habla ahora..." : `Pedir ${activeMode?.placeholder || 'canción'}...`} 
         />
         <button type="submit" className="send-btn" disabled={loading}>
           <Send size={18} />

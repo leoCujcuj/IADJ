@@ -19,6 +19,10 @@ export default function QueueItem({
     );
   }
 
+  const songId = song.videoId || song.id;
+  const isFirst = index === 0;
+  const isLast = index >= totalItems - 1;
+
   return (
     <div className="queue-item">
       <span className="queue-index">{index + 1}</span>
@@ -28,30 +32,41 @@ export default function QueueItem({
       </div>
       <div className="queue-actions">
         <button 
+          type="button"
           className="action-btn" 
-          onClick={() => handleMoveInQueue(song.videoId, 0)} 
+          onClick={() => handleMoveInQueue(songId, 0)} 
+          disabled={isFirst}
           title="Poner primero"
+          aria-label="Poner primero en la cola"
         >
           ↑↑
         </button>
         <button 
+          type="button"
           className="action-btn" 
-          onClick={() => handleMoveInQueue(song.videoId, Math.max(0, index - 1))} 
-          title="Subir"
+          onClick={() => handleMoveInQueue(songId, Math.max(0, index - 1))} 
+          disabled={isFirst}
+          title="Subir un lugar"
+          aria-label="Subir cancion un lugar"
         >
           ↑
         </button>
         <button 
+          type="button"
           className="action-btn" 
-          onClick={() => handleMoveInQueue(song.videoId, Math.min(totalItems - 1, index + 1))} 
-          title="Bajar"
+          onClick={() => handleMoveInQueue(songId, Math.min(totalItems - 1, index + 1))} 
+          disabled={isLast}
+          title="Bajar un lugar"
+          aria-label="Bajar cancion un lugar"
         >
           ↓
         </button>
         <button 
+          type="button"
           className="remove-item" 
-          onClick={() => handleRemoveFromQueue(song.videoId)}
+          onClick={() => handleRemoveFromQueue(songId)}
           title="Eliminar de la cola"
+          aria-label="Eliminar cancion de la cola"
         >
           ×
         </button>

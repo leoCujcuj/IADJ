@@ -1,5 +1,5 @@
 import React from 'react';
-import { Music, ThumbsUp, ThumbsDown, SkipForward, Mic2, Sparkles, Loader2, Flame } from 'lucide-react';
+import { Music, ThumbsUp, ThumbsDown, SkipForward, SkipBack, Play, Pause, Mic2, Sparkles, Loader2, Flame } from 'lucide-react';
 
 export default function PlayerCard({
   currentSong,
@@ -7,9 +7,12 @@ export default function PlayerCard({
   globalRepeatCount = 0,
   isLiked,
   isDisliked,
+  isPlaying = false,
+  handleTogglePlay,
   handleLike,
   handleDislike,
   handleNext,
+  handlePrevious,
   onOpenLyrics,
   onOpenTrivia,
   loadingTrivia
@@ -71,58 +74,82 @@ export default function PlayerCard({
         )}
       </div>
 
-      {/* 3. Controles ordenados ABAJO del video */}
+      {/* 3. Controles unificados ABAJO del video */}
       <div className="player-controls-bar">
-        <div className="controls-group discovery-group">
-          <button 
-            className="control-btn lyrics" 
-            onClick={onOpenLyrics}
-            disabled={!currentSong}
-            title="Ver letra sincronizada"
-          >
-            <Mic2 size={17} />
-            <span>Letras</span>
-          </button>
-          <button 
-            className="control-btn trivia" 
-            onClick={onOpenTrivia}
-            disabled={!currentSong || loadingTrivia}
-            title="Ver curiosidades del tema o músico"
-          >
-            {loadingTrivia ? <Loader2 size={17} className="spinner" /> : <Sparkles size={17} />}
-            <span>Curiosidades</span>
-          </button>
-        </div>
+        <div className="unified-controls-row">
+          {/* Descubrimiento: Letras y Curiosidades */}
+          <div className="controls-group discovery-group">
+            <button 
+              className="control-btn lyrics" 
+              onClick={onOpenLyrics}
+              disabled={!currentSong}
+              title="Ver letra sincronizada"
+            >
+              <Mic2 size={16} />
+              <span>Letras</span>
+            </button>
+            <button 
+              className="control-btn trivia" 
+              onClick={onOpenTrivia}
+              disabled={!currentSong || loadingTrivia}
+              title="Ver curiosidades del tema o músico"
+            >
+              {loadingTrivia ? <Loader2 size={16} className="spinner" /> : <Sparkles size={16} />}
+              <span>Curiosidades</span>
+            </button>
+          </div>
 
-        <div className="controls-divider"></div>
+          {/* Reproducción Principal: Anterior, Play/Pausa, Siguiente */}
+          <div className="controls-group playback-group">
+            <button 
+              className="control-btn prev" 
+              onClick={handlePrevious}
+              disabled={!currentSong}
+              title="Volver a la canción anterior"
+            >
+              <SkipBack size={17} />
+              <span>Anterior</span>
+            </button>
+            <button 
+              className={`control-btn play-pause ${isPlaying ? 'playing' : ''}`} 
+              onClick={handleTogglePlay}
+              disabled={!currentSong}
+              title={isPlaying ? "Pausar reproducción" : "Reanudar reproducción"}
+            >
+              {isPlaying ? <Pause size={19} /> : <Play size={19} fill="currentColor" />}
+              <span>{isPlaying ? 'Pausa' : 'Play'}</span>
+            </button>
+            <button 
+              className="control-btn next" 
+              onClick={handleNext}
+              title="Saltar a la siguiente canción"
+            >
+              <SkipForward size={17} />
+              <span>Siguiente</span>
+            </button>
+          </div>
 
-        <div className="controls-group playback-group">
-          <button 
-            className={`control-btn like ${isLiked ? 'active' : ''}`} 
-            onClick={handleLike}
-            disabled={!currentSong}
-            title="Actualizará la lista en base a esta canción para ponerte más temas similares"
-          >
-            <ThumbsUp size={18} fill={isLiked ? "currentColor" : "none"} />
-            <span>{isLiked ? 'Liked!' : 'Like'}</span>
-          </button>
-          <button 
-            className={`control-btn dislike ${isDisliked ? 'active' : ''}`} 
-            onClick={handleDislike}
-            disabled={!currentSong}
-            title="Se cambiará de canción a una diferente y el DJ evitará este estilo en la sesión"
-          >
-            <ThumbsDown size={18} fill={isDisliked ? "currentColor" : "none"} />
-            <span>Dislike</span>
-          </button>
-          <button 
-            className="control-btn next" 
-            onClick={handleNext}
-            title="Saltar a la siguiente canción"
-          >
-            <span>Siguiente</span>
-            <SkipForward size={18} />
-          </button>
+          {/* Reacciones: Like y Dislike */}
+          <div className="controls-group reactions-group">
+            <button 
+              className={`control-btn like ${isLiked ? 'active' : ''}`} 
+              onClick={handleLike}
+              disabled={!currentSong}
+              title="Actualizará la lista en base a esta canción para ponerte más temas similares"
+            >
+              <ThumbsUp size={16} fill={isLiked ? "currentColor" : "none"} />
+              <span>{isLiked ? 'Liked' : 'Like'}</span>
+            </button>
+            <button 
+              className={`control-btn dislike ${isDisliked ? 'active' : ''}`} 
+              onClick={handleDislike}
+              disabled={!currentSong}
+              title="Se cambiará de canción a una diferente y el DJ evitará este estilo en la sesión"
+            >
+              <ThumbsDown size={16} fill={isDisliked ? "currentColor" : "none"} />
+              <span>Dislike</span>
+            </button>
+          </div>
         </div>
       </div>
     </>

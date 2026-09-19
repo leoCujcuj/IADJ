@@ -1,13 +1,14 @@
 const express = require('express');
 const router = express.Router();
+
 const { 
   handleChat, 
   handlePreload, 
-  handleLyrics, 
-  handleTranslateLyrics, 
-  handleExportPlaylist, 
-  handleTrivia, 
   handleSessionTransition,
+  handleVoicePreview
+} = require('../controllers/chatController');
+
+const {
   handleGetCurrentSession,
   handleSaveSession,
   handleResetSession,
@@ -15,15 +16,27 @@ const {
   handleLoadSession,
   handleCreateSession,
   handleRenameSession,
-  handleDeleteSession,
-  handleFallbackVideo,
+  handleDeleteSession
+} = require('../controllers/sessionController');
+
+const {
+  handleGetTasteProfile,
+  handleSaveTasteProfile
+} = require('../controllers/profileController');
+
+const {
   handleGetFavorites,
   handleGetFavoriteCount,
-  handleRecordHistory,
-  handleGetTasteProfile,
-  handleSaveTasteProfile,
-  handleVoicePreview
-} = require('../controllers/chatController');
+  handleRecordHistory
+} = require('../controllers/favoritesController');
+
+const {
+  handleLyrics,
+  handleTranslateLyrics,
+  handleTrivia,
+  handleExportPlaylist,
+  handleFallbackVideo
+} = require('../controllers/mediaController');
 
 router.post('/chat', handleChat);
 router.post('/preload', handlePreload);

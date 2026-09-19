@@ -1,17 +1,39 @@
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 const { PYTHON_SERVICE_URL, DJ_INTRODUCE_SONG_PROMPT, OPENROUTER_API_KEY } = require('../config/constants');
 const { getDJDecision } = require('../services/djService');
 const { generateTTS } = require('../services/ttsService');
+const chatState = require('./chatState');
 
-const lyricsCacheFolder = path.join(__dirname, '..', 'temp_audio', 'lyrics_cache');
-if (!fs.existsSync(lyricsCacheFolder)) {
-  fs.mkdirSync(lyricsCacheFolder, { recursive: true });
-}
+const {
+  preloadSongLyrics,
+  handleLyrics,
+  handleTranslateLyrics,
+  handleTrivia,
+  handleExportPlaylist,
+  handleFallbackVideo
+} = require('./mediaController');
 
-let songsSinceLastDJIntervention = 1;
-const triviaCache = new Map();
+const {
+  handleGetCurrentSession,
+  handleSaveSession,
+  handleResetSession,
+  handleGetSessions,
+  handleLoadSession,
+  handleCreateSession,
+  handleRenameSession,
+  handleDeleteSession
+} = require('./sessionController');
+
+const {
+  handleGetTasteProfile,
+  handleSaveTasteProfile
+} = require('./profileController');
+
+const {
+  handleGetFavorites,
+  handleGetFavoriteCount,
+  handleRecordHistory
+} = require('./favoritesController');
 
 function getTimeContext(userTimeZone) {
   const tz = userTimeZone || process.env.TZ || 'America/Guatemala';
@@ -218,8 +240,12 @@ PERFIL DE GUSTOS Y RESTRICCIONES DEL USUARIO:
 
     // CASO 1: El usuario pide pasar a la siguiente canción de la cola (o fin de canción)
     if (isPureNextRequest(message)) {
-      songsSinceLastDJIntervention++;
-      console.log(`[SESIÓN RADIO] Canción en sesión: ${songsSinceLastDJIntervention}/${targetFrequency || 'Solo Chat'}`);
+      if (targetFrequency > 0 && chatState.count >= targetFrequency) {
+        chatState.reset();
+      } else {
+        chatState.increment();
+      }
+      console.log(`[SESIÓN RADIO] Canción en sesión: ${chatState.count}/${targetFrequency || 'Solo Chat'}`);
 
       try {
         const searchRes = await axios.get(`${PYTHON_SERVICE_URL}/search`, { 
@@ -239,10 +265,10 @@ PERFIL DE GUSTOS Y RESTRICCIONES DEL USUARIO:
 
       // Habla si targetFrequency > 0 y se alcanzó la cuota, O si fue una acción de dislike explícita
       const isDislike = /\b(?:dislike|no\s+me\s+gusta)\b/i.test(message);
-      const shouldSpeak = (targetFrequency > 0 && songsSinceLastDJIntervention >= targetFrequency) || isDislike;
+      const shouldSpeak = (targetFrequency > 0 && chatState.count >= targetFrequency) || isDislike;
 
       if (shouldSpeak && nextSong && nextSong.title) {
-        songsSinceLastDJIntervention = 0; // Reiniciar contador de sesión
+        chatState.resetToZero(); // Reiniciar contador de sesión
         const songArtist = nextSong.artist || nextSong.artists?.[0]?.name || 'el artista';
         let prompt = `MODO: ${isLogged ? 'LOGUEADO' : 'INVITADO'}. Presenta el bloque con la siguiente canción: "${nextSong.title}" de "${songArtist}".`;
         if (isDislike) {
@@ -265,6 +291,17 @@ PERFIL DE GUSTOS Y RESTRICCIONES DEL USUARIO:
       }
 
       return res.json({ dj_comment: djComment, audioUrl, nextSong });
+    }
+
+    // CASO 1.5: Peticion de retroceso a cancion anterior (sin consumo de IA ni busqueda en YouTube)
+    const isPreviousIntent = /^(?:(?:ir\s+a\s+la\s+|pon(?:me)?\s+(?:la\s+)?)?(?:canci[oó]n\s+)?(?:anterior|previa)|regresa(?:r)?|vuelve(?:\s+a\s+la\s+anterior)?|atr[aá]s)$/i.test((message || '').trim());
+    if (isPreviousIntent) {
+      console.log("[CHAT]: Peticion de cancion anterior detectada. Retornando accion previa directa sin consumo de IA.");
+      return res.json({
+        action: 'previous',
+        dj_comment: 'Regresando a la cancion anterior.',
+        skip_ai: true
+      });
     }
 
     // CASO 2: Petición musical explícita o conversación en el chat
@@ -336,7 +373,7 @@ REGLAS OBLIGATORIAS:
     console.log(`DJ (${searchType || 'song'}): ¿Cambiar música? ${shouldChangeSong ? 'SÍ (' + djDecision.busqueda + ')' : 'NO (respondiendo en chat sin cambiar)'} -> Locución inicial: "${djComment}"`);
 
     if (shouldChangeSong) {
-      songsSinceLastDJIntervention = 1; // La primera canción del nuevo bloque empieza en 1
+      chatState.reset(); // La primera canción del nuevo bloque empieza en 1
       console.log(`[SESIÓN RADIO] Canción en sesión: 1/${targetFrequency || 'Solo Chat'}`);
       
       // CASO A: Lista de canciones múltiples solicitadas por el usuario (desde IA o fallback del texto)
@@ -484,7 +521,7 @@ async function handlePreload(req, res) {
     }
 
     // Predecir si la siguiente canción alcanzará la cuota de sesión para hablar
-    const willSpeak = targetFrequency > 0 && (songsSinceLastDJIntervention + 1) >= targetFrequency;
+    const willSpeak = targetFrequency > 0 && (chatState.count + 1) >= targetFrequency;
     let djComment = null;
     let audioUrl = null;
 
@@ -502,7 +539,7 @@ async function handlePreload(req, res) {
       audioUrl = await generateTTS(djComment, voice_id);
       console.log(`[PRELOAD CON VOZ Y TRIVIA]: "${candidate.title}" - ${songArtist}`);
     } else {
-      console.log(`[PRELOAD SILENCIOSO - AHORRANDO ELEVENLABS]: "${candidate.title}" (${songsSinceLastDJIntervention + 1}/${targetFrequency || 'Solo Chat'})`);
+      console.log(`[PRELOAD SILENCIOSO - AHORRANDO ELEVENLABS]: "${candidate.title}" (${chatState.count + 1}/${targetFrequency || 'Solo Chat'})`);
     }
 
     // Precargar letras y traducción en segundo plano antes de que la canción comience a sonar
@@ -520,536 +557,39 @@ async function handlePreload(req, res) {
   }
 }
 
-function parseLRCLines(lrcText) {
-  if (!lrcText) return [];
-  const lines = lrcText.split('\n');
-  const result = [];
-  const timeRegex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\]/;
-
-  for (const line of lines) {
-    const match = timeRegex.exec(line);
-    if (match) {
-      const minutes = parseInt(match[1], 10);
-      const seconds = parseInt(match[2], 10);
-      const hundredths = match[3] ? parseFloat(`0.${match[3]}`) : 0;
-      const totalSeconds = minutes * 60 + seconds + hundredths;
-      const text = line.replace(timeRegex, '').trim();
-      if (text) {
-        result.push({ time: totalSeconds, text });
-      }
-    }
-  }
-  return result;
-}
-
-async function fastTranslateText(text) {
-  try {
-    const url = "https://translate.google.com/m?sl=auto&tl=es&q=" + encodeURIComponent(text);
-    const res = await axios.get(url, { 
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }, 
-      timeout: 5000 
-    });
-    const match = res.data.match(/<div class="result-container">(.*?)<\/div>/s);
-    if (match) {
-      return match[1]
-        .replace(/<br\s*[\/]?>/gi, "\n")
-        .replace(/&amp;/g, "&")
-        .replace(/&quot;/g, "\"")
-        .replace(/&#39;/g, "'")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">");
-    }
-  } catch (err) {
-    console.error("Error en fastTranslateText (Google):", err.message);
-  }
-
-  // Fallback MyMemory para bloques de texto compactos
-  try {
-    const cleanedText = text.substring(0, 450);
-    const myMemoryUrl = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(cleanedText) + "&langpair=auto|es";
-    const mmRes = await axios.get(myMemoryUrl, { timeout: 4000 });
-    if (mmRes.data?.responseData?.translatedText) {
-      return mmRes.data.responseData.translatedText;
-    }
-  } catch (mErr) {}
-
-  return null;
-}
-
-async function translateLyrics(textArray, videoId) {
-  if (!textArray || textArray.length === 0) return [];
-  
-  const cacheFile = path.join(lyricsCacheFolder, `${videoId}_es.json`);
-  if (fs.existsSync(cacheFile)) {
-    try {
-      const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-      if (Array.isArray(cached) && cached.length === textArray.length) {
-        console.log(`[LYRICS CACHE HIT]: Letras traducidas para ${videoId} desde caché.`);
-        return cached;
-      }
-    } catch (e) {}
-  }
-
-  try {
-    // 1. Intentar traducción rápida con etiquetas de índice [0], [1], [2]
-    const taggedPayload = textArray.map((line, idx) => `[${idx}] ${line || ' '}`).join('\n');
-    let translatedBlock = await fastTranslateText(taggedPayload);
-    
-    if (translatedBlock) {
-      const resultMap = new Map();
-      const lineRegex = /\[(\d+)\]\s*([^\[\n]*)/g;
-      let match;
-      while ((match = lineRegex.exec(translatedBlock)) !== null) {
-        const index = parseInt(match[1], 10);
-        const translatedText = match[2].trim();
-        resultMap.set(index, translatedText);
-      }
-
-      if (resultMap.size > 0) {
-        const alignedTranslations = textArray.map((originalLine, idx) => {
-          if (!originalLine || !originalLine.trim()) return '';
-          return resultMap.get(idx) || '';
-        });
-
-        fs.writeFileSync(cacheFile, JSON.stringify(alignedTranslations));
-        console.log(`[LYRICS TRADUCIDAS ALINEADAS 1:1]: ${alignedTranslations.length} versos para ${videoId}`);
-        return alignedTranslations;
-      }
-    }
-  } catch (err) {
-    console.error("Error traduciendo letras con scraper:", err.message);
-  }
-
-  // 2. Fallback Inteligente con DJ AI
-  try {
-    const aiPrompt = `Traduce cada una de estas líneas de canción al español manteniendo la misma cantidad e índice:
-${textArray.slice(0, 50).map((l, i) => `[${i}] ${l}`).join('\n')}
-
-Devuelve un JSON plano:
-{"translations": ["...", "..."]}`;
-
-    const decision = await getDJDecision(aiPrompt, "Eres un traductor musical profesional. Devuelve EXCLUSIVAMENTE un JSON con la propiedad 'translations' que contenga el array de versos traducidos al español.");
-    if (decision && Array.isArray(decision.translations) && decision.translations.length > 0) {
-      const fullAligned = textArray.map((_, idx) => decision.translations[idx] || '');
-      fs.writeFileSync(cacheFile, JSON.stringify(fullAligned));
-      console.log(`[LYRICS TRADUCIDAS CON DJ AI]: ${fullAligned.length} versos para ${videoId}`);
-      return fullAligned;
-    }
-  } catch (aiErr) {
-    console.error("Error en fallback DJ AI para traducción de letras:", aiErr.message);
-  }
-
-  return [];
-}
-
-// Precarga en segundo plano de letras y traducción antes de que empiece a sonar la canción
-async function preloadSongLyrics(videoId, title, artist) {
-  if (!videoId) return;
-  const cacheFile = path.join(lyricsCacheFolder, `${videoId}_es.json`);
-  if (fs.existsSync(cacheFile)) return;
-
-  console.log(`[PRELOAD LETRAS]: Precargando letras y traducción para ${title} - ${artist}...`);
-  try {
-    const cleanTitle = (title || '').replace(/\(.*?\)|\[.*?\]/g, '').trim();
-    const cleanArtist = (artist || '').split(/,|&|feat\./i)[0].trim();
-    let lrcText = null;
-
-    const lrcRes = await axios.get('https://lrclib.net/api/get', {
-      params: { track_name: cleanTitle, artist_name: cleanArtist },
-      timeout: 3000
-    });
-    if (lrcRes.data?.syncedLyrics) {
-      lrcText = lrcRes.data.syncedLyrics;
-    }
-
-    if (lrcText) {
-      const lines = parseLRCLines(lrcText);
-      if (lines.length > 0) {
-        await translateLyrics(lines.map(l => l.text), videoId);
-        console.log(`[PRELOAD COMPLETO]: Traducción lista para ${title} antes de que comience.`);
-      }
-    }
-  } catch (err) {
-    console.warn(`[PRELOAD ERROR]: No se pudo precargar letra para ${title}:`, err.message);
-  }
-}
-
-// Endpoint instantáneo para obtener letras (<200ms) sin bloquear
-async function handleLyrics(req, res) {
-  const { videoId } = req.params;
-  const { title = '', artist = '' } = req.query;
-
-  let syncedLyrics = null;
-  let plainLyrics = null;
-  let source = 'YouTube Music';
-  let isSynced = false;
-
-  // 1. Intentar obtener letras sincronizadas (Karaoke con timestamps) de LRCLIB
-  if (title) {
-    try {
-      const cleanTitle = title.replace(/\(.*?\)|\[.*?\]/g, '').trim();
-      const cleanArtist = artist.split(/,|&|feat\./i)[0].trim();
-      const lrcRes = await axios.get('https://lrclib.net/api/get', {
-        params: { track_name: cleanTitle, artist_name: cleanArtist },
-        timeout: 2500
-      });
-
-      if (lrcRes.data?.syncedLyrics) {
-        syncedLyrics = lrcRes.data.syncedLyrics;
-        plainLyrics = lrcRes.data.plainLyrics;
-        source = 'Karaoke Sincronizado';
-        isSynced = true;
-      }
-    } catch (e) {
-      try {
-        const searchRes = await axios.get('https://lrclib.net/api/search', {
-          params: { q: `${title} ${artist}`.trim() },
-          timeout: 2500
-        });
-        const match = searchRes.data?.find(item => item.syncedLyrics);
-        if (match) {
-          syncedLyrics = match.syncedLyrics;
-          plainLyrics = match.plainLyrics;
-          source = 'Karaoke Sincronizado';
-          isSynced = true;
-        }
-      } catch (e2) {}
-    }
-  }
-
-  // 2. Fallback a YouTube Music
-  if (!syncedLyrics && !plainLyrics) {
-    try {
-      const lyricsRes = await axios.get(`${PYTHON_SERVICE_URL}/lyrics/${videoId}`, { timeout: 2500 });
-      if (lyricsRes.data?.lyrics) {
-        plainLyrics = lyricsRes.data.lyrics;
-        source = 'YouTube Music';
-      }
-    } catch (error) {
-      console.error("Error obteniendo letras de YouTube Music:", error.message);
-    }
-  }
-
-  if (!syncedLyrics && !plainLyrics) {
-    return res.json({ isSynced: false, plainLyrics: null });
-  }
-
-  // Verificar si ya hay traducciones en caché
-  let cachedTranslations = null;
-  const cacheFile = path.join(lyricsCacheFolder, `${videoId}_es.json`);
-  if (fs.existsSync(cacheFile)) {
-    try {
-      cachedTranslations = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-    } catch (e) {}
-  }
-
-  // 3. Respuesta ultra rápida con letras sincronizadas (si es primera canción y no hay caché, traducir de una vez en 400ms)
-  if (isSynced && syncedLyrics) {
-    const lines = parseLRCLines(syncedLyrics);
-    if (!cachedTranslations && lines.length > 0) {
-      cachedTranslations = await translateLyrics(lines.map(l => l.text), videoId);
-    }
-    const linesWithTranslation = lines.map((item, idx) => ({
-      time: item.time,
-      text: item.text,
-      translation: (cachedTranslations && cachedTranslations[idx]) || null
-    }));
-
-    return res.json({
-      isSynced: true,
-      lines: linesWithTranslation,
-      hasTranslation: Array.isArray(cachedTranslations) && cachedTranslations.length > 0,
-      source
-    });
-  }
-
-  // 4. Respuesta ultra rápida con letras planas
-  if (plainLyrics) {
-    const splitLines = plainLyrics.split('\n');
-    if (!cachedTranslations) {
-      const nonEmpties = splitLines.filter(l => l.trim().length > 0);
-      cachedTranslations = await translateLyrics(nonEmpties, videoId);
-    }
-    let transIdx = 0;
-    const plainWithTranslation = splitLines.map(line => {
-      if (!line.trim()) return { text: '', translation: '' };
-      const trans = (cachedTranslations && cachedTranslations[transIdx]) || null;
-      transIdx++;
-      return { text: line, translation: trans };
-    });
-
-    return res.json({
-      isSynced: false,
-      plainLines: plainWithTranslation,
-      hasTranslation: Array.isArray(cachedTranslations) && cachedTranslations.length > 0,
-      source
-    });
-  }
-
-  res.json({ isSynced: false, plainLyrics: null });
-}
-
-// Endpoint en segundo plano para traducir versos sin congelar la app
-async function handleTranslateLyrics(req, res) {
-  const { videoId } = req.params;
-  const { lines } = req.body;
-
-  if (!lines || !Array.isArray(lines) || lines.length === 0) {
-    return res.json({ translations: [] });
-  }
-
-  const translations = await translateLyrics(lines, videoId);
-  res.json({ translations });
-}
-
-// Endpoint para obtener curiosidades breves de la canción o del músico
-async function handleTrivia(req, res) {
-  const { videoId } = req.params;
-  const { title = '', artist = '', refresh = 'false' } = req.query;
-  const isRefresh = refresh === 'true';
-
-  let list = triviaCache.get(videoId);
-  if (!Array.isArray(list)) {
-    list = list ? [list] : [];
-  }
-
-  // Si no se pide refrescar y ya tenemos al menos una en caché, devolver la última
-  if (!isRefresh && list.length > 0) {
-    return res.json({ trivia: list[list.length - 1], source: 'cache' });
-  }
-
-  const cleanTitle = (title || '').replace(/\(.*?\)|\[.*?\]/g, '').trim();
-  const cleanArtist = (artist || '').trim();
-
-  const previousTrivia = list.length > 0 
-    ? `Datos ya mencionados anteriormente: "${list.join(' // ')}".\nProporciona una curiosidad completamente NUEVA y DIFERENTE a las anteriores.` 
-    : '';
-
-  const prompt = `Canción: "${cleanTitle || 'Tema'}" del artista "${cleanArtist || 'Músico'}".
-${previousTrivia}
-Comparte un dato curioso, detalle de producción, inspiración o récord real y fascinante sobre esta canción o sobre el artista.
-REGLAS ESTRICTAS:
-- Que sea BREVE y CONCISO: exactamente entre 2 y 3 oraciones cortas (máximo 40 palabras).
-- Nada de introducciones largas ni rodeos. Ve directo al dato interesante.
-- En español.`;
-
-  const triviaSystemPrompt = `Eres un historiador musical y DJ de radio melómano con una cultura musical impecable.
-Tu misión es dar un dato curioso breve, verídico y sorprendente sobre la canción o músico indicado.
-INSTRUCCIONES DE FORMATO:
-- Responde EXCLUSIVAMENTE con un objeto JSON plano:
-{
-  "curiosidad": "Tu dato curioso aquí (2 a 3 frases cortas)"
-}
-- Prohibido usar bloques markdown o texto extra.`;
-
-  try {
-    const decision = await getDJDecision(prompt, triviaSystemPrompt);
-    if (decision && decision.curiosidad) {
-      const trivia = decision.curiosidad.trim();
-      list.push(trivia);
-      triviaCache.set(videoId, list);
-      return res.json({ trivia, source: 'ai' });
-    }
-  } catch (err) {
-    console.error("Error al generar trivia musical:", err.message);
-  }
-
-  // Fallback si la IA no responde o tarda
-  const fallback = cleanArtist 
-    ? `"${cleanTitle}" de ${cleanArtist} cuenta con una producción destacada y es uno de los temas favoritos de los oyentes por su estilo inconfundible.`
-    : `Esta canción destaca por su rica instrumentación y melodía que atrapa desde los primeros compases.`;
-
-  list.push(fallback);
-  triviaCache.set(videoId, list);
-  return res.json({ trivia: fallback, source: 'fallback' });
-}
-
-// Endpoint para exportar la playlist del día
-async function handleExportPlaylist(req, res) {
-  try {
-    const exportRes = await axios.post(`${PYTHON_SERVICE_URL}/playlist/export`);
-    res.json(exportRes.data);
-  } catch (error) {
-    console.error("Error exportando playlist:", error.message);
-    res.status(500).json({ error: error.message });
-  }
-}
-
-// Endpoint para registrar la transición de canción precargada y avanzar el contador
+// Endpoint para registrar la transicion de cancion precargada y avanzar el contador
 function handleSessionTransition(req, res) {
-  const { song, spoke, frequency = 5 } = req.body;
+  const { song, spoke, frequency = 5, isBackTrack = false, isReplay = false } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
 
+  if (isBackTrack) {
+    // Si retrocedemos en el historial, decrementamos la posicion en el bloque actual
+    chatState.decrement();
+    console.log(`[SESIÓN RADIO] Retroceso a "${song?.title || 'Tema'}": Posicion en bloque ${chatState.count}/${targetFrequency || 'Solo Chat'}`);
+    return res.json({ count: chatState.count });
+  }
+
+  if (isReplay) {
+    // Si re-avanzamos hacia una cancion que ya habia sido escuchada en este bloque, no inflamos el contador
+    console.log(`[SESIÓN RADIO] Repeticion/avance hacia "${song?.title || 'Tema'}" ya escuchada: ${chatState.count}/${targetFrequency || 'Solo Chat'}`);
+    return res.json({ count: chatState.count });
+  }
+
   if (spoke) {
-    // Si el DJ intervino al inicio de esta canción, la sesión se reinicia para que el próximo tema arranque en 1
-    songsSinceLastDJIntervention = 0;
-    console.log(`[SESIÓN RADIO] DJ intervino en "${song?.title || 'Tema'}". Próximo bloque comenzará en 1/${targetFrequency || 'Solo Chat'}`);
+    chatState.resetToZero();
+    console.log(`[SESIÓN RADIO] DJ intervino en "${song?.title || 'Tema'}". Proximo bloque comenzara en 1/${targetFrequency || 'Solo Chat'}`);
   } else {
-    songsSinceLastDJIntervention++;
-    console.log(`[SESIÓN RADIO] Canción en sesión: ${song?.title || 'Tema'} (${songsSinceLastDJIntervention}/${targetFrequency || 'Solo Chat'})`);
+    // Si ya alcanzo la cuota maxima de canciones del bloque y no hubo locucion, cicla a un nuevo bloque
+    if (targetFrequency > 0 && chatState.count >= targetFrequency) {
+      chatState.reset();
+      console.log(`[SESIÓN RADIO] Bloque completado sin locucion. Nuevo ciclo comenzado con: "${song?.title || 'Tema'}" (1/${targetFrequency})`);
+    } else {
+      chatState.increment();
+      console.log(`[SESIÓN RADIO] Cancion en sesion: ${song?.title || 'Tema'} (${chatState.count}/${targetFrequency || 'Solo Chat'})`);
+    }
   }
 
-  res.json({ count: songsSinceLastDJIntervention });
-}
-
-// Handlers de persistencia de sesiones en BD
-async function handleGetCurrentSession(req, res) {
-  try {
-    const response = await axios.get(`${PYTHON_SERVICE_URL}/session/current`, { timeout: 4000 });
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error obteniendo sesión actual:", error.message);
-    return res.json({ exists: false, session: null, error: error.message });
-  }
-}
-
-async function handleSaveSession(req, res) {
-  try {
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/session/save`, req.body, { timeout: 5000 });
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error guardando sesión:", error.message);
-    return res.json({ success: false, error: error.message });
-  }
-}
-
-async function handleResetSession(req, res) {
-  try {
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/session/reset`, req.body || {}, { timeout: 5000 });
-    songsSinceLastDJIntervention = 1;
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error reiniciando sesión:", error.message);
-    return res.status(500).json({ error: error.message });
-  }
-}
-
-async function handleGetSessions(req, res) {
-  try {
-    const response = await axios.get(`${PYTHON_SERVICE_URL}/sessions`, { timeout: 4000 });
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error listando sesiones:", error.message);
-    return res.json({ sessions: [], error: error.message });
-  }
-}
-
-async function handleLoadSession(req, res) {
-  try {
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/session/load`, req.body, { timeout: 5000 });
-    songsSinceLastDJIntervention = 1;
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error cargando sesión:", error.message);
-    return res.status(500).json({ error: error.message });
-  }
-}
-
-async function handleCreateSession(req, res) {
-  try {
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/session/create`, req.body, { timeout: 5000 });
-    songsSinceLastDJIntervention = 1;
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error creando sesión:", error.message);
-    return res.status(500).json({ error: error.message });
-  }
-}
-
-async function handleRenameSession(req, res) {
-  try {
-    const { id } = req.params;
-    const response = await axios.put(`${PYTHON_SERVICE_URL}/session/${id}/rename`, req.body, { timeout: 4000 });
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error renombrando sesión:", error.message);
-    return res.status(500).json({ error: error.message });
-  }
-}
-
-async function handleDeleteSession(req, res) {
-  try {
-    const { id } = req.params;
-    const response = await axios.delete(`${PYTHON_SERVICE_URL}/session/${id}`, { timeout: 4000 });
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error eliminando sesión:", error.message);
-    return res.status(500).json({ error: error.message });
-  }
-}
-
-async function handleFallbackVideo(req, res) {
-  try {
-    const { title, artist, exclude_id } = req.query;
-    const response = await axios.get(`${PYTHON_SERVICE_URL}/fallback-video`, {
-      params: { title, artist, exclude_id },
-      timeout: 5000
-    });
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error en fallback video:", error.message);
-    return res.status(500).json({ error: error.message });
-  }
-}
-
-async function handleGetFavorites(req, res) {
-  try {
-    const limit = req.query.limit || 30;
-    const scope = req.query.scope || 'general';
-    const sessionId = req.query.session_id || null;
-    const response = await axios.get(`${PYTHON_SERVICE_URL}/favorites/repeats`, {
-      params: { limit, scope, session_id: sessionId },
-      timeout: 5000
-    });
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error obteniendo favoritas:", error.message);
-    return res.json({ favorites: [], scope: req.query.scope || 'general' });
-  }
-}
-
-async function handleGetFavoriteCount(req, res) {
-  try {
-    const { videoId } = req.params;
-    const sessionId = req.query.session_id || null;
-    const response = await axios.get(`${PYTHON_SERVICE_URL}/favorites/count/${videoId}`, {
-      params: { session_id: sessionId },
-      timeout: 3000
-    });
-    return res.json(response.data);
-  } catch (error) {
-    return res.json({ totalCount: 0, requestCount: 0, likeCount: 0, sessionCount: 0 });
-  }
-}
-
-async function handleRecordHistory(req, res) {
-  try {
-    const { videoId } = req.params;
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/history/record/${videoId}`, {}, { timeout: 4000 });
-    return res.json(response.data);
-  } catch (error) {
-    return res.json({ status: "error", message: error.message });
-  }
-}
-
-async function handleGetTasteProfile(req, res) {
-  try {
-    const response = await axios.get(`${PYTHON_SERVICE_URL}/profile/taste`);
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error al obtener perfil musical:", error.message);
-    return res.status(500).json({ error: "Error al obtener perfil musical" });
-  }
-}
-
-async function handleSaveTasteProfile(req, res) {
-  try {
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/profile/taste`, req.body);
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Error al guardar perfil musical:", error.message);
-    return res.status(500).json({ error: "Error al guardar perfil musical" });
-  }
+  res.json({ count: chatState.count });
 }
 
 async function handleVoicePreview(req, res) {
@@ -1073,10 +613,13 @@ module.exports = {
   handleChat,
   handlePreload,
   handleSessionTransition,
+  handleVoicePreview,
+  // Re-exportaciones para retrocompatibilidad total
   handleLyrics,
   handleTranslateLyrics,
   handleTrivia,
   handleExportPlaylist,
+  handleFallbackVideo,
   handleGetCurrentSession,
   handleSaveSession,
   handleResetSession,
@@ -1085,11 +628,9 @@ module.exports = {
   handleCreateSession,
   handleRenameSession,
   handleDeleteSession,
-  handleFallbackVideo,
   handleGetFavorites,
   handleGetFavoriteCount,
   handleRecordHistory,
   handleGetTasteProfile,
-  handleSaveTasteProfile,
-  handleVoicePreview
+  handleSaveTasteProfile
 };

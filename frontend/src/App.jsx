@@ -41,6 +41,9 @@ function App() {
     handleRemoveFromQueue,
     handleSendMessage,
     handleNext,
+    handlePrevious,
+    isPlaying,
+    handleTogglePlay,
     handleLike,
     handleDislike,
     chatEndRef,
@@ -146,6 +149,9 @@ function App() {
               handleLike={handleLike}
               handleDislike={handleDislike}
               handleNext={handleNext}
+              handlePrevious={handlePrevious}
+              isPlaying={isPlaying}
+              handleTogglePlay={handleTogglePlay}
               onOpenLyrics={() => setIsLyricsOpen(prev => !prev)}
               onOpenTrivia={handleOpenTrivia}
               loadingTrivia={loadingTrivia}
@@ -237,6 +243,14 @@ function App() {
         tasteProfile={tasteProfile}
         onSaveTasteProfile={saveTasteProfile}
         loading={loadingTasteProfile}
+      />
+
+      {/* Anclaje de audio nativo para controles multimedia de Windows SMTC */}
+      <audio
+        id="media-session-anchor"
+        src="/silence.wav"
+        loop
+        preload="auto"
       />
 
       {modalDialog && (

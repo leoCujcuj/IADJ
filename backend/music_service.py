@@ -558,11 +558,9 @@ def ensure_queue_populated(yt, threshold=10, blocking=False):
         t.start()
 
 def purge_queue_duplicates():
-    """Elimina del frente de la cola cualquier tema idéntico al que está sonando o al último del historial"""
-    global current_queue, currently_playing_id, currently_playing_title, played_history
+    """Elimina del frente de la cola cualquier tema idéntico al que está sonando"""
+    global current_queue, currently_playing_id, currently_playing_title
     curr_norm = normalize_song_title(currently_playing_title)
-    last_hist_id = played_history[0].get('videoId') if played_history else None
-    last_hist_norm = normalize_song_title(played_history[0].get('title'), played_history[0].get('artist', '')) if played_history else ""
 
     while current_queue:
         top = current_queue[0]
@@ -573,16 +571,48 @@ def purge_queue_duplicates():
             is_repeat = True
         elif curr_norm and top_norm and curr_norm == top_norm:
             is_repeat = True
-        elif last_hist_id and top_id == last_hist_id:
-            is_repeat = True
-        elif last_hist_norm and top_norm and last_hist_norm == top_norm:
-            is_repeat = True
 
         if is_repeat:
             print(f"DEBUG: Purgando canción repetida del inicio de la cola: '{top.get('title')}' ({top_id})")
             current_queue.pop(0)
         else:
             break
+
+class StepBackRequest(BaseModel):
+    current_song: Optional[Dict[str, Any]] = None
+    target_song: Optional[Dict[str, Any]] = None
+
+@app.post("/queue/step_back")
+def step_back_queue(req: StepBackRequest):
+    global current_queue, played_history, currently_playing_id, currently_playing_title
+    curr = req.current_song
+    target = req.target_song
+
+    # 1. Si curr es valido, colocarlo al frente de la cola para que 'Siguiente' lo reproduzca
+    if curr and curr.get('videoId'):
+        curr_id = curr['videoId']
+        played_history = [s for s in played_history if s.get('videoId') != curr_id]
+        current_queue = [s for s in current_queue if s.get('videoId') != curr_id]
+        current_queue.insert(0, curr)
+        print(f"DEBUG: [STEP BACK]: '{curr.get('title')}' reinsertado al frente de la cola (pos 0).")
+
+    # 2. Si target es valido, establecerlo como la cancion activa
+    if target and target.get('videoId'):
+        target_id = target['videoId']
+        currently_playing_id = target_id
+        currently_playing_title = target.get('title', '')
+        current_queue = [s for s in current_queue if s.get('videoId') != target_id]
+        played_history = [s for s in played_history if s.get('videoId') != target_id]
+        played_history.insert(0, target)
+        print(f"DEBUG: [STEP BACK]: '{target.get('title')}' establecido como cancion activa.")
+
+    return {
+        "status": "ok",
+        "queue": current_queue,
+        "history": played_history,
+        "currentlyPlayingId": currently_playing_id,
+        "currentlyPlayingTitle": currently_playing_title
+    }
 
 @app.get("/queue/peek")
 def peek_queue():
@@ -659,7 +689,9 @@ def status():
         "history": played_history,
         "source": current_source,
         "mode": current_mode,
-        "modeParam": current_mode_param
+        "modeParam": current_mode_param,
+        "currentlyPlayingId": currently_playing_id,
+        "currentlyPlayingTitle": currently_playing_title
     }
 
 @app.get("/history")
@@ -965,10 +997,11 @@ def remove_from_queue(video_id: str):
 @app.post("/queue/move/{video_id}")
 def move_in_queue(video_id: str, to_index: int = Query(...)):
     global current_queue
-    song = next((s for s in current_queue if s['videoId'] == video_id), None)
+    song = next((s for s in current_queue if (s.get('videoId') or s.get('id')) == video_id), None)
     if song:
-        current_queue = [s for s in current_queue if s['videoId'] != video_id]
-        current_queue.insert(to_index, song)
+        current_queue = [s for s in current_queue if (s.get('videoId') or s.get('id')) != video_id]
+        bounded_index = max(0, min(to_index, len(current_queue)))
+        current_queue.insert(bounded_index, song)
         return {"status": "moved"}
     return {"error": "No encontrada"}
 
@@ -1491,11 +1524,9 @@ def get_current_session():
         parsed_chat_h = parse_json_field(chat_h, [])
         parsed_sett = parse_json_field(sett, {})
 
-        current_queue = parsed_q
-        played_history = parsed_h
-        if parsed_cur_song:
-            currently_playing_id = parsed_cur_song.get("videoId")
-            currently_playing_title = parsed_cur_song.get("title", "")
+        # GET es una consulta de solo lectura, no debe mutar la memoria viva del reproductor
+        active_queue = current_queue if current_queue else parsed_q
+        active_history = played_history if played_history else parsed_h
 
         return {
             "exists": True,
