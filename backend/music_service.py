@@ -491,9 +491,8 @@ def _perform_refill(yt, threshold=10):
                 _, more_tracks = get_artist_discography_tracks(yt, current_mode_param)
                 if more_tracks:
                     set_queue(more_tracks, f"Solo {current_mode_param}", clear=False, filter_history=True, append=True)
-                    if len(current_queue) > threshold:
-                        print(f"DEBUG: [AUTO-REFILL] Modo Artista completado con {len(current_queue)} canciones.")
-                        return
+                    print(f"DEBUG: [AUTO-REFILL] Modo Artista completado con {len(current_queue)} canciones.")
+                return
 
             # 2. Radio de YouTube Music basada en la última canción de la cola, o la actual, o el historial
             source_id = None
@@ -1164,7 +1163,7 @@ def record_favorite_interaction(video_id: str, title: str, artist: str, interact
 
 @app.post("/like/{video_id}")
 def handle_like(video_id: str, artist: str, current_title: Optional[str] = Query(None), session_id: Optional[str] = Query(None)):
-    global currently_playing_id, currently_playing_title
+    global currently_playing_id, currently_playing_title, current_mode, current_mode_param, current_queue
     currently_playing_id = video_id; currently_playing_title = current_title or ""
     
     # Registrar interacción de Like en el contador de favoritas (global y por estación)
@@ -1174,8 +1173,20 @@ def handle_like(video_id: str, artist: str, current_title: Optional[str] = Query
         yt = get_yt()
         yt.rate_song(video_id, 'LIKE')
         
-        radio_tracks = get_song_radio(yt, video_id, limit=20)
-        set_queue(radio_tracks, f"Basado en {artist}", clear=False)
+        # Respetar estrictamente el modo activo del reproductor
+        if current_mode == "artist" and current_mode_param:
+            # En Modo Artista, la cola es exclusiva de ese artista. Jamas inyectar radio variada de otros artistas
+            print(f"DEBUG: [LIKE] Cancion de {artist} marcada con Like en Modo Artista ({current_mode_param}). Preservando cola exclusiva del artista.")
+        elif current_mode in ["album", "playlist"]:
+            # En Album o Playlist, respetar el orden del album o lista
+            print(f"DEBUG: [LIKE] Cancion marcada con Like en Modo {current_mode}. Preservando repertorio original.")
+        else:
+            # En modo libre/cancion, solo agregar recomendaciones al final si la cola tiene pocas canciones
+            if len(current_queue) <= 3:
+                radio_tracks = get_song_radio(yt, video_id, limit=15)
+                if radio_tracks:
+                    set_queue(radio_tracks, f"Basado en {artist}", clear=False, append=True)
+
         return {
             "status": "liked", 
             "repeat_count": fav_data.get("session_total_count") or fav_data.get("total_count", 1),
@@ -1466,12 +1477,12 @@ def parse_json_field(val, default):
 
 class SessionSavePayload(BaseModel):
     id: Optional[str] = "session_default"
-    name: Optional[str] = "Sesión Principal"
+    name: Optional[str] = None
     current_song: Optional[Dict[str, Any]] = None
-    queue: Optional[List[Dict[str, Any]]] = []
-    history: Optional[List[Dict[str, Any]]] = []
-    chat_history: Optional[List[Dict[str, Any]]] = []
-    settings: Optional[Dict[str, Any]] = {}
+    queue: Optional[List[Dict[str, Any]]] = None
+    history: Optional[List[Dict[str, Any]]] = None
+    chat_history: Optional[List[Dict[str, Any]]] = None
+    settings: Optional[Dict[str, Any]] = None
 
 class SessionLoadPayload(BaseModel):
     id: str
@@ -1511,6 +1522,20 @@ def get_current_session():
             LIMIT 1;
         """)
         row = cur.fetchone()
+
+        # Respaldo: si ninguna sesión tiene is_active = TRUE, recuperar la más reciente
+        if not row:
+            cur.execute("""
+                SELECT id, name, current_song, queue, history, chat_history, settings, is_active, updated_at
+                FROM radio_sessions
+                ORDER BY updated_at DESC
+                LIMIT 1;
+            """)
+            row = cur.fetchone()
+            if row:
+                cur.execute("UPDATE radio_sessions SET is_active = TRUE WHERE id = %s;", (row[0],))
+                conn.commit()
+
         cur.close()
         release_db_connection(conn)
 
@@ -1523,10 +1548,12 @@ def get_current_session():
         parsed_h = parse_json_field(h, [])
         parsed_chat_h = parse_json_field(chat_h, [])
         parsed_sett = parse_json_field(sett, {})
-
-        # GET es una consulta de solo lectura, no debe mutar la memoria viva del reproductor
-        active_queue = current_queue if current_queue else parsed_q
-        active_history = played_history if played_history else parsed_h
+        # Sincronizar memoria activa de Python con la sesión de la base de datos
+        played_history = parsed_h
+        current_queue = parsed_q
+        if parsed_cur_song:
+            currently_playing_id = parsed_cur_song.get("videoId")
+            currently_playing_title = parsed_cur_song.get("title", "")
 
         return {
             "exists": True,
@@ -1568,22 +1595,42 @@ def save_session(payload: SessionSavePayload):
             INSERT INTO radio_sessions (id, name, current_song, queue, history, chat_history, settings, is_active, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, NOW())
             ON CONFLICT (id) DO UPDATE SET
-                name = COALESCE(EXCLUDED.name, radio_sessions.name),
-                current_song = EXCLUDED.current_song,
-                queue = EXCLUDED.queue,
-                history = EXCLUDED.history,
-                chat_history = EXCLUDED.chat_history,
-                settings = EXCLUDED.settings,
+                name = CASE 
+                    WHEN EXCLUDED.name IS NOT NULL AND EXCLUDED.name != '' AND EXCLUDED.name != 'Sesión Principal' THEN EXCLUDED.name
+                    WHEN radio_sessions.name IS NOT NULL AND radio_sessions.name != '' AND radio_sessions.name != 'Sesión Principal' THEN radio_sessions.name
+                    ELSE COALESCE(NULLIF(EXCLUDED.name, ''), radio_sessions.name, 'Sesión Principal')
+                END,
+                current_song = COALESCE(EXCLUDED.current_song, radio_sessions.current_song),
+                queue = CASE 
+                    WHEN EXCLUDED.queue IS NOT NULL THEN EXCLUDED.queue 
+                    ELSE radio_sessions.queue 
+                END,
+                history = CASE 
+                    WHEN EXCLUDED.history IS NOT NULL THEN EXCLUDED.history 
+                    ELSE radio_sessions.history 
+                END,
+                chat_history = CASE 
+                    WHEN EXCLUDED.chat_history IS NOT NULL 
+                         AND jsonb_array_length(EXCLUDED.chat_history) <= 1 
+                         AND jsonb_array_length(COALESCE(radio_sessions.chat_history, '[]'::jsonb)) > 1 
+                    THEN radio_sessions.chat_history 
+                    WHEN EXCLUDED.chat_history IS NOT NULL THEN EXCLUDED.chat_history
+                    ELSE radio_sessions.chat_history
+                END,
+                settings = CASE 
+                    WHEN EXCLUDED.settings IS NOT NULL AND EXCLUDED.settings != '{}'::jsonb THEN EXCLUDED.settings 
+                    ELSE radio_sessions.settings 
+                END,
                 is_active = TRUE,
                 updated_at = NOW();
         """, (
             payload.id,
-            payload.name,
-            json.dumps(payload.current_song) if payload.current_song else None,
-            json.dumps(payload.queue),
-            json.dumps(payload.history),
-            json.dumps(payload.chat_history),
-            json.dumps(payload.settings)
+            payload.name or "Sesión Principal",
+            json.dumps(payload.current_song) if payload.current_song is not None else None,
+            json.dumps(payload.queue) if payload.queue is not None else '[]',
+            json.dumps(payload.history) if payload.history is not None else '[]',
+            json.dumps(payload.chat_history) if payload.chat_history is not None else '[]',
+            json.dumps(payload.settings) if payload.settings is not None else '{}'
         ))
         cur.execute("UPDATE radio_sessions SET is_active = FALSE WHERE id != %s;", (payload.id,))
         conn.commit()

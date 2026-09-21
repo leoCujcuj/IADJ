@@ -23,12 +23,14 @@ export default function useRadioSessions({
   const [sessionId, setSessionId] = useState(() => {
     return localStorage.getItem('dj_session_id') || 'session_default';
   });
-  const [sessionName, setSessionName] = useState('Sesión Principal');
+  const [sessionName, setSessionName] = useState(() => {
+    return localStorage.getItem('dj_session_name') || 'Sesión Principal';
+  });
   const [sessionStatus, setSessionStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'restored' | 'error'
   const [isSessionsOpen, setIsSessionsOpen] = useState(false);
   const [sessionsList, setSessionsList] = useState([]);
   const isRestoringSessionRef = useRef(true);
-  const hasRestoredRef = useRef(false);
+  const hasRestoredSuccessfullyRef = useRef(false);
   const saveTimeoutRef = useRef(null);
 
   const settingsSettersRef = useRef(settingsSetters);
@@ -48,9 +50,6 @@ export default function useRadioSessions({
 
   // Restauracion inicial de sesion desde PostgreSQL (o localStorage como respaldo). Corre estrictamente una sola vez al montar.
   useEffect(() => {
-    if (hasRestoredRef.current) return;
-    hasRestoredRef.current = true;
-
     let isMounted = true;
 
     const restoreSession = async () => {
@@ -66,7 +65,10 @@ export default function useRadioSessions({
             setSessionId(s.id);
             localStorage.setItem('dj_session_id', s.id);
           }
-          if (s.name) setSessionName(s.name);
+          if (s.name) {
+            setSessionName(s.name);
+            localStorage.setItem('dj_session_name', s.name);
+          }
           if (s.current_song && s.current_song.videoId) {
             if (setCurrentSong) setCurrentSong(s.current_song);
             if (currentSongRef) currentSongRef.current = s.current_song;
@@ -74,7 +76,7 @@ export default function useRadioSessions({
           if (Array.isArray(s.queue) && s.queue.length > 0 && setQueue) {
             setQueue(s.queue);
           }
-          if (Array.isArray(s.history) && s.history.length > 0 && setHistory) {
+          if (Array.isArray(s.history) && setHistory) {
             setHistory(s.history);
             if (playedHistoryRef) playedHistoryRef.current = [...s.history].reverse();
           }
@@ -89,6 +91,7 @@ export default function useRadioSessions({
             if (s.settings.autoPauseOnTabChange !== undefined && currentSetters.setAutoPauseOnTabChange) currentSetters.setAutoPauseOnTabChange(s.settings.autoPauseOnTabChange);
             if (s.settings.duckingVolume !== undefined && currentSetters.setDuckingVolume) currentSetters.setDuckingVolume(s.settings.duckingVolume);
           }
+          hasRestoredSuccessfullyRef.current = true;
           setSessionStatus('restored');
           console.log('[SESION] Sesion inicial restaurada con exito desde la Base de Datos.');
         } else {
@@ -96,13 +99,22 @@ export default function useRadioSessions({
           if (backup) {
             try {
               const parsed = JSON.parse(backup);
+              if (parsed.sessionName) {
+                setSessionName(parsed.sessionName);
+                localStorage.setItem('dj_session_name', parsed.sessionName);
+              }
+              if (parsed.sessionId) {
+                setSessionId(parsed.sessionId);
+                localStorage.setItem('dj_session_id', parsed.sessionId);
+              }
               if (parsed.currentSong && setCurrentSong) setCurrentSong(parsed.currentSong);
               if (parsed.queue && setQueue) setQueue(parsed.queue);
-              if (parsed.history && setHistory) {
+              if (Array.isArray(parsed.history) && setHistory) {
                 setHistory(parsed.history);
                 if (playedHistoryRef) playedHistoryRef.current = [...parsed.history].reverse();
               }
               if (parsed.chatHistory && setChatHistory) setChatHistory(parsed.chatHistory);
+              hasRestoredSuccessfullyRef.current = true;
               console.log('[SESION] Sesion restaurada desde copia local de respaldo.');
             } catch (e) {}
           }
@@ -113,13 +125,22 @@ export default function useRadioSessions({
         if (backup) {
           try {
             const parsed = JSON.parse(backup);
+            if (parsed.sessionName) {
+              setSessionName(parsed.sessionName);
+              localStorage.setItem('dj_session_name', parsed.sessionName);
+            }
+            if (parsed.sessionId) {
+              setSessionId(parsed.sessionId);
+              localStorage.setItem('dj_session_id', parsed.sessionId);
+            }
             if (parsed.currentSong && setCurrentSong) setCurrentSong(parsed.currentSong);
             if (parsed.queue && setQueue) setQueue(parsed.queue);
-            if (parsed.history && setHistory) {
+            if (Array.isArray(parsed.history) && setHistory) {
               setHistory(parsed.history);
               if (playedHistoryRef) playedHistoryRef.current = [...parsed.history].reverse();
             }
             if (parsed.chatHistory && setChatHistory) setChatHistory(parsed.chatHistory);
+            hasRestoredSuccessfullyRef.current = true;
           } catch (e) {}
         }
       } finally {
@@ -146,7 +167,7 @@ export default function useRadioSessions({
 
   // Autoguardado con debounce (1.5 segundos) hacia PostgreSQL y localStorage
   useEffect(() => {
-    if (isRestoringSessionRef.current) return;
+    if (isRestoringSessionRef.current || !hasRestoredSuccessfullyRef.current) return;
     if (!currentSong && (!queue || queue.length === 0) && (!history || history.length === 0) && (!chatHistory || chatHistory.length <= 1)) return;
 
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
@@ -165,7 +186,10 @@ export default function useRadioSessions({
       };
 
       try {
+        localStorage.setItem('dj_session_name', sessionName);
         localStorage.setItem('dj_session_backup', JSON.stringify({
+          sessionId,
+          sessionName,
           currentSong,
           queue,
           history,
@@ -219,7 +243,10 @@ export default function useRadioSessions({
       if (data && data.new_session_id) {
         setSessionId(data.new_session_id);
         localStorage.setItem('dj_session_id', data.new_session_id);
-        if (data.name) setSessionName(data.name);
+        if (data.name) {
+          setSessionName(data.name);
+          localStorage.setItem('dj_session_name', data.name);
+        }
       }
     } catch (e) {
       const localNewId = `session_${Date.now()}`;
@@ -247,6 +274,12 @@ export default function useRadioSessions({
 
   const handleSwitchSession = useCallback(async (targetId) => {
     if (!targetId || targetId === sessionId) return;
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    isRestoringSessionRef.current = true;
 
     if (currentSong || (queue && queue.length > 0) || (history && history.length > 0) || (chatHistory && chatHistory.length > 1)) {
       try {
@@ -281,7 +314,9 @@ export default function useRadioSessions({
         const s = data.session;
         setSessionId(s.id);
         localStorage.setItem('dj_session_id', s.id);
-        setSessionName(s.name || 'Sesión de Radio');
+        const loadedName = s.name || 'Sesión de Radio';
+        setSessionName(loadedName);
+        localStorage.setItem('dj_session_name', loadedName);
         
         if (setCurrentSong) setCurrentSong(s.current_song || null);
         if (currentSongRef) currentSongRef.current = s.current_song || null;
@@ -295,7 +330,7 @@ export default function useRadioSessions({
         if (playedHistoryRef) playedHistoryRef.current = Array.isArray(s.history) ? [...s.history].reverse() : [];
         if (setChatHistory) {
           setChatHistory(Array.isArray(s.chat_history) && s.chat_history.length > 0 ? s.chat_history : [
-            { sender: 'dj', text: `¡Qué onda! Sintonizando "${s.name}". ¿Qué rolita te gustaría escuchar aquí?` }
+            { sender: 'dj', text: `¡Qué onda! Sintonizando "${loadedName}". ¿Qué rolita te gustaría escuchar aquí?` }
           ]);
         }
 
@@ -314,11 +349,21 @@ export default function useRadioSessions({
     } catch (err) {
       console.error("Error al conmutar sesión:", err);
       setSessionStatus('error');
+    } finally {
+      setTimeout(() => {
+        isRestoringSessionRef.current = false;
+      }, 1200);
     }
   }, [sessionId, sessionName, currentSong, queue, history, chatHistory, settings, settingsSetters, playerRef, setCurrentSong, currentSongRef, setQueue, setHistory, playedHistoryRef, setChatHistory, fetchSessions]);
 
   const handleCreateSession = useCallback(async (customName) => {
     const name = (customName || '').trim() || 'Nueva Estación';
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    isRestoringSessionRef.current = true;
 
     if (currentSong || (queue && queue.length > 0) || (history && history.length > 0)) {
       try {
@@ -352,6 +397,7 @@ export default function useRadioSessions({
         setSessionId(s.id);
         localStorage.setItem('dj_session_id', s.id);
         setSessionName(s.name);
+        localStorage.setItem('dj_session_name', s.name);
         if (setCurrentSong) setCurrentSong(null);
         if (currentSongRef) currentSongRef.current = null;
         if (setQueue) setQueue([]);
@@ -371,21 +417,27 @@ export default function useRadioSessions({
     } catch (err) {
       console.error("Error creando nueva sesión:", err);
       setSessionStatus('error');
+    } finally {
+      setTimeout(() => {
+        isRestoringSessionRef.current = false;
+      }, 1200);
     }
   }, [sessionId, sessionName, currentSong, queue, history, chatHistory, settings, playerRef, setCurrentSong, currentSongRef, setQueue, setHistory, setChatHistory, fetchSessions]);
 
   const handleRenameSession = useCallback(async (id, newName) => {
-    if (!id || !newName.trim()) return;
+    const trimmed = (newName || '').trim();
+    if (!id || !trimmed) return;
     try {
       const res = await fetch(`http://127.0.0.1:3001/api/session/${id}/rename`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim() })
+        body: JSON.stringify({ name: trimmed })
       });
       const data = await res.json();
       if (data && data.success) {
         if (id === sessionId) {
-          setSessionName(newName.trim());
+          setSessionName(trimmed);
+          localStorage.setItem('dj_session_name', trimmed);
         }
         fetchSessions();
       }
@@ -408,6 +460,7 @@ export default function useRadioSessions({
           setSessionId(s.id);
           localStorage.setItem('dj_session_id', s.id);
           setSessionName(s.name);
+          localStorage.setItem('dj_session_name', s.name);
           if (setCurrentSong) setCurrentSong(s.current_song || null);
           if (currentSongRef) currentSongRef.current = s.current_song || null;
           if (setQueue) setQueue(s.queue || []);

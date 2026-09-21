@@ -230,14 +230,6 @@ export default function useDJRadio() {
       const newStatus = data.status === 'logeado';
       setIsConnected(prev => prev !== newStatus ? newStatus : prev);
       setQueue(prev => isSameTrackList(prev, data.queue) ? prev : (data.queue || []));
-      if (playedHistoryRef.current.length === 0 && Array.isArray(data.history) && data.history.length > 0) {
-        const currentId = currentSongRef.current?.videoId || data.currentlyPlayingId;
-        const pastTracks = data.history.filter(s => s?.videoId && s.videoId !== currentId);
-        if (pastTracks.length > 0) {
-          playedHistoryRef.current = [...pastTracks].reverse();
-          setHistory(pastTracks);
-        }
-      }
       setQueueSource(prev => prev !== data.source ? data.source : prev);
     } catch (e) {
       console.error(e);
