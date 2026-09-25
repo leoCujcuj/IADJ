@@ -1947,6 +1947,7 @@ class TasteProfilePayload(BaseModel):
     disliked_artists: Optional[List[str]] = []
     disliked_songs: Optional[List[Any]] = []
     disliked_genres: Optional[List[str]] = []
+    confirm_clear: Optional[bool] = False
 
 def load_taste_profile_from_db():
     global favorite_artists, favorite_songs, favorite_genres, disliked_artists, disliked_songs, disliked_genres
@@ -2046,14 +2047,10 @@ def save_taste_profile(payload: TasteProfilePayload):
     dis_s = payload.disliked_songs or []
     dis_g = list(dict.fromkeys([x.strip() for x in (payload.disliked_genres or []) if x and x.strip()]))
 
-    favorite_artists = set(fav_a)
-    favorite_songs = fav_s
-    favorite_genres = set(fav_g)
-    disliked_artists = set(dis_a)
-    disliked_songs = dis_s
-    disliked_genres = set(dis_g)
-
-    purge_disliked_from_queue()
+    is_empty_payload = (
+        len(fav_a) == 0 and len(fav_s) == 0 and len(fav_g) == 0 and
+        len(dis_a) == 0 and len(dis_s) == 0 and len(dis_g) == 0
+    )
 
     conn = get_db_connection()
     if not conn:
@@ -2061,6 +2058,51 @@ def save_taste_profile(payload: TasteProfilePayload):
     try:
         cur = conn.cursor()
         target_id = payload.user_id or 'default_user'
+
+        # Proteccion: evitar sobreescribir con listas vacias si no hay confirmacion explicita
+        if is_empty_payload and not payload.confirm_clear:
+            cur.execute("""
+                SELECT favorite_artists, favorite_songs, favorite_genres,
+                       disliked_artists, disliked_songs, disliked_genres
+                FROM user_music_profile
+                WHERE id = %s
+                LIMIT 1;
+            """, (target_id,))
+            existing_row = cur.fetchone()
+            if existing_row:
+                e_fa = parse_json_field(existing_row[0], [])
+                e_fs = parse_json_field(existing_row[1], [])
+                e_fg = parse_json_field(existing_row[2], [])
+                e_da = parse_json_field(existing_row[3], [])
+                e_ds = parse_json_field(existing_row[4], [])
+                e_dg = parse_json_field(existing_row[5], [])
+                has_existing = any(len(arr) > 0 for arr in [e_fa, e_fs, e_fg, e_da, e_ds, e_dg])
+                if has_existing:
+                    cur.close()
+                    release_db_connection(conn)
+                    print("DEBUG: Intento de sobreescritura de perfil con listas vacias bloqueado por proteccion.")
+                    return {
+                        "status": "ignored",
+                        "message": "Operacion omitida: El perfil actual contiene datos guardados y se recibio una solicitud vacia sin confirmacion.",
+                        "profile": {
+                            "favorite_artists": e_fa,
+                            "favorite_songs": e_fs,
+                            "favorite_genres": e_fg,
+                            "disliked_artists": e_da,
+                            "disliked_songs": e_ds,
+                            "disliked_genres": e_dg
+                        }
+                    }
+
+        favorite_artists = set(fav_a)
+        favorite_songs = fav_s
+        favorite_genres = set(fav_g)
+        disliked_artists = set(dis_a)
+        disliked_songs = dis_s
+        disliked_genres = set(dis_g)
+
+        purge_disliked_from_queue()
+
         cur.execute("""
             INSERT INTO user_music_profile (
                 id, favorite_artists, favorite_songs, favorite_genres,

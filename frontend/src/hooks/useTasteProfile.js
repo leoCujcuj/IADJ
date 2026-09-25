@@ -16,6 +16,7 @@ export default function useTasteProfile() {
   const [tasteProfile, setTasteProfile] = useState(INITIAL_PROFILE);
   const [isTasteModalOpen, setIsTasteModalOpen] = useState(false);
   const [loadingTasteProfile, setLoadingTasteProfile] = useState(false);
+  const [isProfileLoaded, setIsProfileLoaded] = useState(false);
   const tasteProfileRef = useRef(tasteProfile);
 
   useEffect(() => {
@@ -37,6 +38,7 @@ export default function useTasteProfile() {
             disliked_songs: data.disliked_songs || [],
             disliked_genres: data.disliked_genres || []
           });
+          setIsProfileLoaded(true);
         }
       }
     } catch (err) {
@@ -69,9 +71,17 @@ export default function useTasteProfile() {
     }
   }, []);
 
+  // Carga inicial al montar la app
   useEffect(() => {
     fetchTasteProfile();
   }, [fetchTasteProfile]);
+
+  // Recargar al abrir el modal para garantizar que siempre muestre los gustos mas recientes
+  useEffect(() => {
+    if (isTasteModalOpen) {
+      fetchTasteProfile();
+    }
+  }, [isTasteModalOpen, fetchTasteProfile]);
 
   return {
     tasteProfile,
@@ -80,6 +90,7 @@ export default function useTasteProfile() {
     isTasteModalOpen,
     setIsTasteModalOpen,
     loadingTasteProfile,
+    isProfileLoaded,
     fetchTasteProfile,
     saveTasteProfile
   };

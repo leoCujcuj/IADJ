@@ -165,19 +165,51 @@ export default function TasteProfileModal({
   // --- Guardar Perfil ---
   const handleSave = async () => {
     setStatusMessage(null);
+
+    const isEmpty = (
+      favoriteArtists.length === 0 &&
+      favoriteSongs.length === 0 &&
+      favoriteGenres.length === 0 &&
+      dislikedArtists.length === 0 &&
+      dislikedSongs.length === 0 &&
+      dislikedGenres.length === 0
+    );
+
+    let confirmClear = false;
+    if (isEmpty) {
+      const hadExistingData = (
+        (tasteProfile?.favorite_artists?.length > 0) ||
+        (tasteProfile?.favorite_songs?.length > 0) ||
+        (tasteProfile?.favorite_genres?.length > 0) ||
+        (tasteProfile?.disliked_artists?.length > 0) ||
+        (tasteProfile?.disliked_songs?.length > 0) ||
+        (tasteProfile?.disliked_genres?.length > 0)
+      );
+      if (hadExistingData) {
+        const confirmed = window.confirm("Estás a punto de borrar todos tus gustos y restricciones guardados. ¿Deseas vaciar tu perfil por completo?");
+        if (!confirmed) return;
+        confirmClear = true;
+      }
+    }
+
     const payload = {
       favorite_artists: favoriteArtists,
       favorite_songs: favoriteSongs,
       favorite_genres: favoriteGenres,
       disliked_artists: dislikedArtists,
       disliked_songs: dislikedSongs,
-      disliked_genres: dislikedGenres
+      disliked_genres: dislikedGenres,
+      confirm_clear: confirmClear
     };
 
     try {
       if (onSaveTasteProfile) {
-        await onSaveTasteProfile(payload);
-        setStatusMessage({ type: 'success', text: 'Gustos musicales guardados con éxito' });
+        const res = await onSaveTasteProfile(payload);
+        if (res && res.status === 'ignored') {
+          setStatusMessage({ type: 'error', text: res.message || 'No se realizaron cambios' });
+        } else {
+          setStatusMessage({ type: 'success', text: 'Gustos musicales guardados con éxito' });
+        }
         setTimeout(() => {
           setStatusMessage(null);
         }, 3000);
