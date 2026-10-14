@@ -53,7 +53,12 @@ CRITERIO MUSICAL Y COHERENCIA:
 
 6. PERFIL DE GUSTOS Y VETOS:
    - Para recomendaciones automáticas, sugerencias abiertas ("recomiéndame algo", "sorpréndeme", "pon algo bueno") o mezclas: prioriza los Artistas Favoritos, Canciones Favoritas y Géneros Favoritos, y NUNCA selecciones ni busques nada que coincida con la lista de vetados.
-   - EXCEPCIÓN DE PETICIÓN DIRECTA: Si el usuario te pide explícitamente una canción o artista que está en su lista de vetados (ej: "pon X"), su orden directa tiene prioridad absoluta y debes complacerlo reproduciendo la canción solicitada.`;
+   - EXCEPCIÓN DE PETICIÓN DIRECTA: Si el usuario te pide explícitamente una canción o artista que está en su lista de vetados (ej: "pon X"), su orden directa tiene prioridad absoluta y debes complacerlo reproduciendo la canción solicitada.
+
+7. ACCIONES DE DISLIKE:
+   - Si el usuario da dislike a una canción o indica que no le gusta, pon SIEMPRE cambiar_cancion: true.
+   - En "busqueda", selecciona OBLIGATORIAMENTE una canción perteneciente a sus Artistas Favoritos, Canciones Favoritas o Géneros Favoritos registrados en su perfil.
+   - En "locucion", confirma brevemente (máximo 15 palabras, español fresco, sin emojis) que cambias la música y presenta el nuevo tema elegido de sus gustos favoritos.`;
 
 const DJ_INTRODUCE_SONG_PROMPT = (nextTitle, nextArtist, currentTitle, currentArtist, options = {}) => {
   const personalityInstruction = DJ_PERSONALITIES[options.personality] || DJ_PERSONALITIES.chill;
@@ -87,6 +92,8 @@ ${triviaInstruction}
 module.exports = {
   PORT: process.env.PORT || 3001,
   PYTHON_SERVICE_URL: process.env.PYTHON_SERVICE_URL || 'http://127.0.0.1:8000',
+  GROQ_API_KEY: process.env.GROQ_API_KEY,
+  GROQ_MODEL: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
   ELEVENLABS_API_KEY_2: process.env.ELEVENLABS_API_KEY_2,

@@ -151,9 +151,17 @@ def init_db():
                     disliked_genres JSONB DEFAULT '[]'::jsonb,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS song_trivia_cache (
+                    video_id VARCHAR(64) PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    artist TEXT NOT NULL,
+                    trivia TEXT NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             conn.commit()
-            print("Tablas 'user_tokens', 'radio_sessions', 'session_interactions', 'song_favorites_repeats', 'session_song_repeats' y 'user_music_profile' listas.")
+            print("Tablas de base de datos listas incluyendo song_trivia_cache.")
             cur.close()
             conn.close()
             break

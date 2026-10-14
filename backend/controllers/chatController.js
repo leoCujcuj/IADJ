@@ -123,6 +123,12 @@ function isPureNextRequest(text) {
     return false;
   }
 
+  // ATENCIÓN: Si es dislike o rechazo, NO es un "next" genérico de cola.
+  // Debe ir a la IA para seleccionar una canción basada en los gustos registrados del usuario.
+  if (t.includes('dislike') || t.includes('no me gusta')) {
+    return false;
+  }
+
   if (
     t === 'siguiente canción dj.' ||
     t === 'siguiente' ||
@@ -130,10 +136,7 @@ function isPureNextRequest(text) {
     t === 'salta' ||
     t === 'siguiente cancion' ||
     t === 'otra cancion' ||
-    t.includes('he dado dislike') ||
-    t.includes('siguiente canción dj') ||
-    t === 'dislike' ||
-    t === 'no me gusta'
+    t.includes('siguiente canción dj')
   ) {
     return true;
   }
@@ -145,6 +148,10 @@ function isPureNextRequest(text) {
 
 function parseMultipleSongs(text) {
   if (!text) return [];
+  const t = text.toLowerCase();
+  if (t.includes('dislike') || t.includes('no me gusta') || isTriviaOrConversation(t)) {
+    return [];
+  }
   let clean = text.replace(/^(?:pon(?:me)?|reproduce|toca|quiero\s+escuchar|quiero\s+o[ií]r|lista(?:\s+de\s+canciones)?(?:\s*:)?)\s+/i, '').trim();
   clean = clean.replace(/^[0-9]+\.\s*/, '');
   // Separar por "+", saltos de línea, comas (con o sin "y"), o " y "
@@ -176,7 +183,7 @@ function isPureArtistRequest(text, detectedArtist) {
 }
 
 async function handleChat(req, res) {
-  const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone, session_id, taste_profile, voice_id } = req.body;
+  const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone, session_id, taste_profile, voice_id, chat_history = [] } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
   const timeContext = getTimeContext(timeZone);
   
@@ -316,11 +323,48 @@ PERFIL DE GUSTOS Y RESTRICCIONES DEL USUARIO:
       modeInstruction = `ESTÁS EN MODO CANCIÓN. En "busqueda", pon artista y canción (ej: "Coldplay Yellow").`;
     }
 
+    const isDislikeAction = /\b(?:dislike|no\s+me\s+gusta)\b/i.test(message);
+
+    const hasRegisteredTastes = (
+      (Array.isArray(userTaste?.favorite_artists) && userTaste.favorite_artists.length > 0) ||
+      (Array.isArray(userTaste?.favorite_songs) && userTaste.favorite_songs.length > 0) ||
+      (Array.isArray(userTaste?.favorite_genres) && userTaste.favorite_genres.length > 0)
+    );
+
+    let dislikeInstruction = '';
+    if (isDislikeAction) {
+      if (hasRegisteredTastes) {
+        const favArtistsList = Array.isArray(userTaste?.favorite_artists) && userTaste.favorite_artists.length > 0
+          ? userTaste.favorite_artists.join(', ') : '';
+        const favSongsList = Array.isArray(userTaste?.favorite_songs) && userTaste.favorite_songs.length > 0
+          ? userTaste.favorite_songs.map(s => typeof s === 'object' ? `${s.title}${s.artist ? ' (' + s.artist + ')' : ''}` : s).join(', ') : '';
+        const favGenresList = Array.isArray(userTaste?.favorite_genres) && userTaste.favorite_genres.length > 0
+          ? userTaste.favorite_genres.join(', ') : '';
+
+        dislikeInstruction = `
+ACCIÓN OBLIGATORIA POR DISLIKE (CON GUSTOS REGISTRADOS):
+- El usuario dio DISLIKE a la canción que sonaba (${currentSong ? `"${currentSong.title}" de ${currentSong.artist}` : 'canción actual'}).
+- CAMBIO INMEDIATO OBLIGATORIO: Debes poner cambiar_cancion: true.
+- SELECCIÓN BASADA EN GUSTOS REGISTRADOS: Elige OBLIGATORIAMENTE una canción perteneciente a sus Artistas Favoritos (${favArtistsList || 'artistas favoritos'}), de sus Canciones Favoritas (${favSongsList || 'canciones favoritas'}) o de sus Géneros Favoritos (${favGenresList || 'géneros predilectos'}).
+- En "busqueda", coloca la canción y artista seleccionados (ej: "Daniel Caesar Violet" o "Brent Faiyaz Trust").
+- En "locucion", confirma brevemente (máximo 15 palabras, español fresco, sin emojis) que dejas atrás esa canción y presenta el nuevo tema elegido de sus gustos favoritos.`;
+      } else {
+        dislikeInstruction = `
+ACCIÓN OBLIGATORIA POR DISLIKE (EL USUARIO AÚN NO TIENE GUSTOS REGISTRADOS):
+- El usuario dio DISLIKE a la canción que sonaba (${currentSong ? `"${currentSong.title}" de ${currentSong.artist}` : 'canción actual'}).
+- CAMBIO INMEDIATO OBLIGATORIO: Debes poner cambiar_cancion: true.
+- Como el usuario aún no tiene gustos registrados en su perfil, elige una alternativa de calidad basada en el historial de la sesión (${historyContext}) o proponiendo una joya musical de vibra afín y fresca (R&B/Soul/Neo-Soul chill), descartando por completo al artista anterior.
+- En "busqueda", coloca artista y canción concreta a reproducir.
+- En "locucion", confirma con naturalidad de locutor de radio que dejas atrás esa canción y presentas una alternativa fresca para encontrar su onda (máximo 16 palabras, sin emojis).`;
+      }
+    }
+
     const prompt = `MODO: ${isLogged ? 'LOGUEADO' : 'INVITADO'}.
 Contexto temporal: ${timeContext}.
 Estilo de locución al hablar: ${personality} (ATENCIÓN: Tu estilo de locutor SOLO define el tono de tu voz al hablar, NUNCA altera la música ni el género a reproducir).
 Usuario dice: "${message}".
 ${modeInstruction}
+${dislikeInstruction}
 Sonando ahora: ${currentSong ? `${currentSong.title} - ${currentSong.artist}` : 'Nada'}.
 Historial reciente: ${historyContext}.${tasteContext}
 REGLAS OBLIGATORIAS:
@@ -334,10 +378,14 @@ REGLAS OBLIGATORIAS:
    - Para recomendaciones, sugerencias abiertas ("recomiéndame algo", "sorpréndeme") o cuando tú elijas la música, JAMÁS elijas, busques ni sugieras artistas, canciones o géneros que figuren como Vetados/Prohibidos en el perfil de gustos.
    - EXCEPCIÓN DE PETICIÓN DIRECTA: Si el usuario te pide explícitamente una canción o artista que está en su lista de vetados, complácelo y búscala de inmediato. En tu locución puedes mencionar brevemente y con frescura que aunque la tenía en su lista negra, sus órdenes mandan en la cabina.`;
 
-    let djDecision = await getDJDecision(prompt);
+    let djDecision = await getDJDecision(prompt, null, chat_history);
     
     if (!djDecision) {
-      djDecision = { locucion: "¡Aquí tienes música para seguir con la vibra!", busqueda: message, cambiar_cancion: true };
+      if (isDislikeAction) {
+        djDecision = { locucion: "", busqueda: "", cambiar_cancion: true };
+      } else {
+        djDecision = { locucion: "¡Aquí tienes música para seguir con la vibra!", busqueda: message, cambiar_cancion: true };
+      }
     }
 
     djComment = djDecision.locucion;
@@ -348,7 +396,50 @@ REGLAS OBLIGATORIAS:
     // Salvaguarda: Si el usuario dio dislike o pidió música explícitamente, SIEMPRE debe cambiar de canción
     if (!isQuestionOrTrivia && /\b(?:dislike|no\s+me\s+gusta|cambia|pon|ponme|reproduce|salta|otra|siguiente)\b/i.test(message)) {
       shouldChangeSong = true;
-      if (!djDecision.busqueda || djDecision.busqueda.trim() === '' || /ya\s+la\s+tienes/i.test(djComment)) {
+      if (isDislikeAction) {
+        if (!djDecision.busqueda || djDecision.busqueda.trim() === '' || djDecision.busqueda === message || /ya\s+la\s+tienes/i.test(djComment)) {
+          let pickedQuery = '';
+          let pickedArtist = '';
+          let pickedTitle = '';
+          if (Array.isArray(userTaste?.favorite_songs) && userTaste.favorite_songs.length > 0) {
+            const randSong = userTaste.favorite_songs[Math.floor(Math.random() * userTaste.favorite_songs.length)];
+            pickedTitle = typeof randSong === 'object' ? randSong.title : randSong;
+            pickedArtist = typeof randSong === 'object' ? randSong.artist : '';
+            pickedQuery = pickedArtist ? `${pickedArtist} ${pickedTitle}` : pickedTitle;
+          } else if (Array.isArray(userTaste?.favorite_artists) && userTaste.favorite_artists.length > 0) {
+            pickedArtist = userTaste.favorite_artists[Math.floor(Math.random() * userTaste.favorite_artists.length)];
+            pickedQuery = pickedArtist;
+          } else if (musicHistory.length > 1) {
+            const prior = musicHistory[1];
+            pickedTitle = prior.title;
+            pickedArtist = prior.artist || prior.artists?.[0]?.name || '';
+            pickedQuery = `${pickedArtist} ${pickedTitle}`;
+          } else {
+            const fallbackCurated = [
+              { title: 'Pink + White', artist: 'Frank Ocean' },
+              { title: 'Congratulations', artist: 'Mac Miller' },
+              { title: 'Dark Red', artist: 'Steve Lacy' },
+              { title: 'Texas Sun', artist: 'Leon Bridges' }
+            ];
+            const chosen = fallbackCurated[Math.floor(Math.random() * fallbackCurated.length)];
+            pickedTitle = chosen.title;
+            pickedArtist = chosen.artist;
+            pickedQuery = `${pickedArtist} ${pickedTitle}`;
+          }
+          djDecision.busqueda = pickedQuery;
+          djDecision.artista = pickedArtist;
+          djDecision.cancion = pickedTitle;
+          djDecision.cambiar_cancion = true;
+          if (!djDecision.locucion || djDecision.locucion.trim() === '' || /ya\s+la\s+tienes/i.test(djComment) || /seguir con la vibra/i.test(djComment)) {
+            djComment = pickedTitle 
+              ? (hasRegisteredTastes
+                  ? `¡Sin problema! Dejamos esa atrás y seguimos con "${pickedTitle}" para ti.`
+                  : `¡Oído! Descartamos esa rola y seguimos con "${pickedTitle}" para refrescar la cabina.`)
+              : `¡Entendido! Pasamos página y seguimos con música fresca para ti.`;
+            djDecision.locucion = djComment;
+          }
+        }
+      } else if (!djDecision.busqueda || djDecision.busqueda.trim() === '' || /ya\s+la\s+tienes/i.test(djComment)) {
         const cleanedUserSearch = message
           .replace(/^(?:pon(?:me)?|reproduce|toca|cambia\s+a|quiero\s+escuchar|quiero\s+o[ií]r)\s+/i, '')
           .replace(/[.?!,]/g, '')
@@ -377,9 +468,9 @@ REGLAS OBLIGATORIAS:
       console.log(`[SESIÓN RADIO] Canción en sesión: 1/${targetFrequency || 'Solo Chat'}`);
       
       // CASO A: Lista de canciones múltiples solicitadas por el usuario (desde IA o fallback del texto)
-      let candidateSongs = Array.isArray(djDecision.canciones) && djDecision.canciones.length >= 2
+      let candidateSongs = (!isDislikeAction && Array.isArray(djDecision.canciones) && djDecision.canciones.length >= 2)
         ? djDecision.canciones
-        : parseMultipleSongs(message);
+        : (!isDislikeAction ? parseMultipleSongs(message) : []);
 
       if (Array.isArray(candidateSongs) && candidateSongs.length >= 2) {
         try {

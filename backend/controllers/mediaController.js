@@ -16,6 +16,15 @@ function parseLRCLines(lrcText) {
   const lines = lrcText.split('\n');
   const result = [];
   const timeRegex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\]/;
+  const offsetRegex = /\[offset:\s*([+-]?\d+)\]/i;
+  let offsetSec = 0;
+
+  for (const line of lines) {
+    const offMatch = offsetRegex.exec(line);
+    if (offMatch) {
+      offsetSec = parseInt(offMatch[1], 10) / 1000;
+    }
+  }
 
   for (const line of lines) {
     const match = timeRegex.exec(line);
@@ -23,10 +32,10 @@ function parseLRCLines(lrcText) {
       const minutes = parseInt(match[1], 10);
       const seconds = parseInt(match[2], 10);
       const hundredths = match[3] ? parseFloat(`0.${match[3]}`) : 0;
-      const totalSeconds = minutes * 60 + seconds + hundredths;
+      const totalSeconds = Math.max(0, minutes * 60 + seconds + hundredths + offsetSec);
       const text = line.replace(timeRegex, '').trim();
       if (text) {
-        result.push({ time: totalSeconds, text });
+        result.push({ time: Math.round(totalSeconds * 100) / 100, text });
       }
     }
   }
@@ -109,38 +118,29 @@ async function translateLyrics(textArray, videoId) {
     console.error("Error traduciendo letras con scraper:", err.message);
   }
 
-  try {
-    const aiPrompt = `Traduce cada una de estas líneas de canción al español manteniendo la misma cantidad e índice:
-${textArray.slice(0, 50).map((l, i) => `[${i}] ${l}`).join('\n')}
-
-Devuelve un JSON plano:
-{"translations": ["...", "..."]}`;
-
-    const decision = await getDJDecision(aiPrompt, "Eres un traductor musical profesional. Devuelve EXCLUSIVAMENTE un JSON con la propiedad 'translations' que contenga el array de versos traducidos al español.");
-    if (decision && Array.isArray(decision.translations) && decision.translations.length > 0) {
-      const fullAligned = textArray.map((_, idx) => decision.translations[idx] || '');
-      fs.writeFileSync(cacheFile, JSON.stringify(fullAligned));
-      console.log(`[LYRICS TRADUCIDAS CON DJ AI]: ${fullAligned.length} versos para ${videoId}`);
-      return fullAligned;
-    }
-  } catch (aiErr) {
-    console.error("Error en fallback DJ AI para traducción de letras:", aiErr.message);
-  }
-
+  // Nota: No usamos LLM para traducir letras completas de canciones para evitar agotar cuotas y tokens.
   return [];
 }
 
-async function preloadSongLyrics(videoId, title, artist) {
+async function preloadSongLyrics(videoId, title, artist, duration) {
   if (!videoId) return;
   const cacheFile = path.join(lyricsCacheFolder, `${videoId}_es.json`);
   if (fs.existsSync(cacheFile)) return;
 
   try {
     let plainLines = [];
-    if (title) {
+    const cleanTitle = (title || '')
+      .replace(/\s*[\(\[](?:official\s*(?:video|audio|music\s*video|visualizer|lyric\s*video|hd|4k)|video\s*oficial|audio\s*oficial|remaster(?:ed)?|live|en\s*vivo)[\)\]]/gi, '')
+      .trim();
+
+    const numDuration = duration && !isNaN(duration) && Number(duration) > 0 ? Math.round(Number(duration)) : null;
+
+    if (cleanTitle || title) {
       try {
+        const getParams = { track_name: cleanTitle || title, artist_name: artist || '' };
+        if (numDuration) getParams.duration = numDuration;
         const lrcRes = await axios.get('https://lrclib.net/api/get', {
-          params: { track_name: title, artist_name: artist || '' },
+          params: getParams,
           timeout: 3000
         });
         const lrcText = lrcRes.data?.syncedLyrics || lrcRes.data?.plainLyrics;
@@ -166,33 +166,56 @@ async function preloadSongLyrics(videoId, title, artist) {
 
 async function handleLyrics(req, res) {
   const { videoId } = req.params;
-  const { title = '', artist = '' } = req.query;
+  const { title = '', artist = '', duration } = req.query;
 
   let syncedLyrics = null;
   let plainLyrics = null;
   let source = null;
   let isSynced = false;
 
-  if (title) {
-    try {
-      const lrcRes = await axios.get('https://lrclib.net/api/get', {
-        params: { track_name: title, artist_name: artist },
-        timeout: 2500
-      });
-      if (lrcRes.data?.syncedLyrics) {
-        syncedLyrics = lrcRes.data.syncedLyrics;
-        plainLyrics = lrcRes.data.plainLyrics;
-        source = 'Karaoke Sincronizado';
-        isSynced = true;
-      }
-    } catch (e) {
+  const cleanTitle = (title || '')
+    .replace(/\s*[\(\[](?:official\s*(?:video|audio|music\s*video|visualizer|lyric\s*video|hd|4k)|video\s*oficial|audio\s*oficial|remaster(?:ed)?|live|en\s*vivo)[\)\]]/gi, '')
+    .trim();
+
+  const numDuration = duration && !isNaN(duration) && Number(duration) > 0 ? Math.round(Number(duration)) : null;
+
+  if (cleanTitle || title) {
+    const candidateTitles = cleanTitle && cleanTitle !== title ? [cleanTitle, title] : [title || cleanTitle];
+
+    for (const cTitle of candidateTitles) {
+      if (!cTitle) continue;
       try {
-        const searchRes = await axios.get('https://lrclib.net/api/search', {
-          params: { q: `${title} ${artist}`.trim() },
+        const getParams = { track_name: cTitle, artist_name: artist };
+        if (numDuration) getParams.duration = numDuration;
+        const lrcRes = await axios.get('https://lrclib.net/api/get', {
+          params: getParams,
           timeout: 2500
         });
-        const match = searchRes.data?.find(item => item.syncedLyrics);
-        if (match) {
+        if (lrcRes.data?.syncedLyrics) {
+          syncedLyrics = lrcRes.data.syncedLyrics;
+          plainLyrics = lrcRes.data.plainLyrics;
+          source = 'Karaoke Sincronizado';
+          isSynced = true;
+          break;
+        }
+      } catch (e) {}
+    }
+
+    if (!syncedLyrics) {
+      try {
+        const queryTerm = `${cleanTitle || title} ${artist}`.trim();
+        const searchRes = await axios.get('https://lrclib.net/api/search', {
+          params: { q: queryTerm },
+          timeout: 2500
+        });
+        const items = searchRes.data || [];
+        const syncedMatches = items.filter(item => item.syncedLyrics);
+        if (syncedMatches.length > 0) {
+          if (numDuration) {
+            // Ordenar por diferencia absoluta de duración con el audio real para descartar snippets o cortes
+            syncedMatches.sort((a, b) => Math.abs((a.duration || 0) - numDuration) - Math.abs((b.duration || 0) - numDuration));
+          }
+          const match = syncedMatches[0];
           syncedLyrics = match.syncedLyrics;
           plainLyrics = match.plainLyrics;
           source = 'Karaoke Sincronizado';
@@ -228,6 +251,10 @@ async function handleLyrics(req, res) {
 
   if (isSynced && syncedLyrics) {
     const lines = parseLRCLines(syncedLyrics);
+    // Invalidar caché si no coincide el número de líneas con la versión seleccionada
+    if (cachedTranslations && Array.isArray(cachedTranslations) && cachedTranslations.length !== lines.length) {
+      cachedTranslations = null;
+    }
     if (!cachedTranslations && lines.length > 0) {
       cachedTranslations = await translateLyrics(lines.map(l => l.text), videoId);
     }
@@ -296,6 +323,19 @@ async function handleTrivia(req, res) {
     return res.json({ trivia: list[list.length - 1], source: 'cache' });
   }
 
+  // 1. Consultar persistencia en base de datos PostgreSQL si no es refresh forzado
+  if (!isRefresh) {
+    try {
+      const dbCheck = await axios.get(`${PYTHON_SERVICE_URL}/trivia/cache/${videoId}`, { timeout: 2000 });
+      if (dbCheck.data?.found && dbCheck.data?.trivia) {
+        const dbTrivia = dbCheck.data.trivia;
+        list.push(dbTrivia);
+        triviaCache.set(videoId, list);
+        return res.json({ trivia: dbTrivia, source: 'db' });
+      }
+    } catch (e) {}
+  }
+
   const cleanTitle = (title || '').replace(/\(.*?\)|\[.*?\]/g, '').trim();
   const cleanArtist = (artist || '').trim();
 
@@ -326,6 +366,15 @@ INSTRUCCIONES DE FORMATO:
       const trivia = decision.curiosidad.trim();
       list.push(trivia);
       triviaCache.set(videoId, list);
+
+      // Guardar en base de datos para no volver a gastar llamadas
+      axios.post(`${PYTHON_SERVICE_URL}/trivia/cache`, {
+        video_id: videoId,
+        title: cleanTitle,
+        artist: cleanArtist,
+        trivia
+      }, { timeout: 3000 }).catch(() => {});
+
       return res.json({ trivia, source: 'ai' });
     }
   } catch (err) {
