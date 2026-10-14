@@ -448,6 +448,170 @@ def get_artist_discography_tracks(yt, artist_query):
 
     return combined_name, interleaved_tracks
 
+def get_hybrid_recommendations(yt, source_id=None, limit=25):
+    """
+    Algoritmo híbrido de recomendación 70/30:
+    - 40% canciones afines de la radio contextual actual (RDAMVM).
+    - 30% canciones del perfil de gustos (artistas favoritos, géneros favoritos, canciones favoritas).
+    - 30% descubrimientos afines evitando repeticiones del historial.
+    """
+    global favorite_artists, favorite_songs, favorite_genres, played_history, current_queue
+
+    radio_tracks = []
+    favorite_tracks = []
+    discovery_tracks = []
+
+    # 1. Componente A: Radio contextual (~40%)
+    if source_id:
+        try:
+            raw_radio = get_song_radio(yt, source_id, limit=20)
+            if raw_radio:
+                radio_tracks = [t for t in raw_radio if not is_track_disliked(t.get('title', ''), t.get('artist', ''))]
+        except Exception as e:
+            print(f"DEBUG: Error en componente radio de recomendaciones: {e}")
+
+    # 2. Componente B: Perfil y Favoritos (~30%)
+    # 2.1 Artistas favoritos
+    if favorite_artists:
+        fav_artist_pool = list(favorite_artists)
+        random.shuffle(fav_artist_pool)
+        for art in fav_artist_pool[:2]:
+            try:
+                _, a_tracks = get_single_artist_tracks(yt, art)
+                if a_tracks:
+                    clean_a = [t for t in a_tracks if not is_track_disliked(t.get('title', ''), t.get('artist', ''))]
+                    if clean_a:
+                        favorite_tracks.extend(random.sample(clean_a, min(3, len(clean_a))))
+            except Exception as e:
+                print(f"DEBUG: Error obteniendo canciones de artista favorito {art}: {e}")
+
+    # 2.2 Géneros favoritos si faltan temas
+    if len(favorite_tracks) < 5 and favorite_genres:
+        fav_genre_pool = list(favorite_genres)
+        random.shuffle(fav_genre_pool)
+        for g in fav_genre_pool[:2]:
+            try:
+                g_res = yt.search(f"{g} mix", filter="songs")
+                if g_res:
+                    for s in g_res[:4]:
+                        v_id = s.get('videoId')
+                        if v_id:
+                            art_name = s.get('artist') or (s['artists'][0]['name'] if s.get('artists') else 'Unknown')
+                            t_name = s.get('title', 'Unknown')
+                            if not is_track_disliked(t_name, art_name):
+                                favorite_tracks.append({"videoId": v_id, "title": t_name, "artist": art_name})
+            except Exception as e:
+                print(f"DEBUG: Error obteniendo canciones por genero {g}: {e}")
+
+    # 2.3 Canciones favoritas guardadas
+    if favorite_songs and len(favorite_tracks) < 6:
+        shuffled_favs = list(favorite_songs)
+        random.shuffle(shuffled_favs)
+        for fs in shuffled_favs[:4]:
+            t_name = fs.get('title') if isinstance(fs, dict) else str(fs)
+            a_name = fs.get('artist', '') if isinstance(fs, dict) else ''
+            v_id = fs.get('videoId') if isinstance(fs, dict) else None
+            if v_id:
+                favorite_tracks.append({"videoId": v_id, "title": t_name, "artist": a_name})
+            elif t_name:
+                try:
+                    s_res = yt.search(f"{a_name} {t_name}".strip(), filter="songs")
+                    if s_res and s_res[0].get('videoId'):
+                        favorite_tracks.append({
+                            "videoId": s_res[0]['videoId'],
+                            "title": s_res[0].get('title', t_name),
+                            "artist": a_name or (s_res[0]['artists'][0]['name'] if s_res[0].get('artists') else 'Unknown')
+                        })
+                except Exception:
+                    pass
+
+    # 3. Componente C: Descubrimiento & Serendipia (~30%)
+    candidate_artists = set()
+    for t in radio_tracks[:5]:
+        if t.get('artist') and t.get('artist') != 'Unknown':
+            candidate_artists.add(t.get('artist'))
+    for t in favorite_tracks[:3]:
+        if t.get('artist') and t.get('artist') != 'Unknown':
+            candidate_artists.add(t.get('artist'))
+
+    if candidate_artists:
+        sample_artists = list(candidate_artists)
+        random.shuffle(sample_artists)
+        for art in sample_artists[:2]:
+            try:
+                disc_res = yt.search(f"{art} similar mix", filter="songs")
+                if disc_res:
+                    for s in disc_res[:5]:
+                        v_id = s.get('videoId')
+                        if v_id:
+                            art_name = s.get('artist') or (s['artists'][0]['name'] if s.get('artists') else 'Unknown')
+                            t_name = s.get('title', 'Unknown')
+                            if not is_track_disliked(t_name, art_name):
+                                discovery_tracks.append({"videoId": v_id, "title": t_name, "artist": art_name})
+            except Exception as e:
+                print(f"DEBUG: Error obteniendo canciones de descubrimiento para {art}: {e}")
+
+    # 4. Entrelazado híbrido proporcional (Patrón 70/30)
+    combined = []
+    seen_ids = set()
+    seen_titles = set()
+
+    existing_ids = {s['videoId'] for s in current_queue if s.get('videoId')}
+    existing_titles = {normalize_song_title(s.get('title'), s.get('artist', '')) for s in current_queue if s.get('title')}
+    if played_history:
+        for p in played_history[:25]:
+            if p.get('videoId'): existing_ids.add(p['videoId'])
+            if p.get('title'): existing_titles.add(normalize_song_title(p.get('title'), p.get('artist', '')))
+
+    def add_candidate(track):
+        v_id = track.get('videoId')
+        if not v_id or v_id in seen_ids or v_id in existing_ids:
+            return False
+        norm = normalize_song_title(track.get('title', ''), track.get('artist', ''))
+        if norm and (norm in seen_titles or norm in existing_titles):
+            return False
+        seen_ids.add(v_id)
+        if norm:
+            seen_titles.add(norm)
+        combined.append(track)
+        return True
+
+    idx_r = 0
+    idx_f = 0
+    idx_d = 0
+
+    while (idx_r < len(radio_tracks) or idx_f < len(favorite_tracks) or idx_d < len(discovery_tracks)) and len(combined) < limit:
+        # 2 de radio contextual
+        added_r = 0
+        while idx_r < len(radio_tracks) and added_r < 2:
+            if add_candidate(radio_tracks[idx_r]):
+                added_r += 1
+            idx_r += 1
+
+        # 1 de favoritos / perfil
+        added_f = 0
+        while idx_f < len(favorite_tracks) and added_f < 1:
+            if add_candidate(favorite_tracks[idx_f]):
+                added_f += 1
+            idx_f += 1
+
+        # 1 de descubrimiento
+        added_d = 0
+        while idx_d < len(discovery_tracks) and added_d < 1:
+            if add_candidate(discovery_tracks[idx_d]):
+                added_d += 1
+            idx_d += 1
+
+        if added_r == 0 and added_f == 0 and added_d == 0:
+            break
+
+    while idx_r < len(radio_tracks) and len(combined) < limit:
+        add_candidate(radio_tracks[idx_r])
+        idx_r += 1
+
+    print(f"DEBUG: [HÍBRIDO 70/30]: Generadas {len(combined)} canciones equilibradas (Radio: {len(radio_tracks)}, Favs: {len(favorite_tracks)}, Discovery: {len(discovery_tracks)}).")
+    return combined
+
 def get_personal_mix(clear=True, append=False):
     global current_queue, current_source, currently_playing_id, played_history
     yt = get_yt()
@@ -479,7 +643,7 @@ def get_personal_mix(clear=True, append=False):
     return False
 
 def _perform_refill(yt, threshold=10):
-    global current_queue, currently_playing_id, currently_playing_title, played_history, current_mode, current_mode_param, is_refilling, current_source
+    global current_queue, currently_playing_id, currently_playing_title, played_history, current_mode, current_mode_param, is_refilling, current_source, favorite_artists, favorite_genres
     with refill_lock:
         if len(current_queue) > threshold:
             return
@@ -494,7 +658,7 @@ def _perform_refill(yt, threshold=10):
                     print(f"DEBUG: [AUTO-REFILL] Modo Artista completado con {len(current_queue)} canciones.")
                 return
 
-            # 2. Radio de YouTube Music basada en la última canción de la cola, o la actual, o el historial
+            # 2. Algoritmo Híbrido 70/30 (Radio contextual + Perfil/Favoritos + Descubrimiento)
             source_id = None
             if current_queue:
                 source_id = current_queue[-1].get('videoId')
@@ -503,13 +667,12 @@ def _perform_refill(yt, threshold=10):
             if not source_id and played_history:
                 source_id = played_history[0].get('videoId')
 
-            if source_id:
-                radio = get_song_radio(yt, source_id, limit=25)
-                if radio:
-                    set_queue(radio, current_source or "Mix Automático", clear=False, filter_history=True, append=True)
-                    if len(current_queue) > threshold:
-                        print(f"DEBUG: [AUTO-REFILL] Radio ({source_id}) completada con {len(current_queue)} canciones.")
-                        return
+            hybrid_tracks = get_hybrid_recommendations(yt, source_id, limit=25)
+            if hybrid_tracks:
+                set_queue(hybrid_tracks, current_source or "Mix Híbrido Inteligente", clear=False, filter_history=True, append=True)
+                if len(current_queue) > threshold:
+                    print(f"DEBUG: [AUTO-REFILL] Refill híbrido completado con {len(current_queue)} canciones.")
+                    return
 
             # 3. Favoritos / Personal mix
             if auth_status == "logeado":
@@ -518,14 +681,18 @@ def _perform_refill(yt, threshold=10):
                         print(f"DEBUG: [AUTO-REFILL] Personal mix completado con {len(current_queue)} canciones.")
                         return
 
-            # 4. Fallback por búsqueda contextual
+            # 4. Fallback dinámico neutral basado en perfil o historial
             query = ""
             if current_queue:
                 query = f"{current_queue[-1].get('artist', '')} {current_queue[-1].get('title', '')}".strip()
             if not query and played_history:
                 query = f"{played_history[0].get('artist', '')} {played_history[0].get('title', '')}".strip()
+            if not query and favorite_artists:
+                query = f"{list(favorite_artists)[0]} mix"
+            elif not query and favorite_genres:
+                query = f"{list(favorite_genres)[0]} chill mix"
             if not query:
-                query = currently_playing_title or "Daniel Caesar Mac Miller Frank Ocean"
+                query = currently_playing_title or "Acoustic Pop Chill Top Hits"
 
             fallback_tracks = yt.search(query, filter="songs")
             if fallback_tracks:
@@ -799,11 +966,16 @@ def search_song(q: Optional[str] = Query(None), type: str = Query("song"), force
                     played_history.insert(0, song)
                     return song
             
-            # 5. Fallback chill inicial
-            initial_results = yt.search("Daniel Caesar Mac Miller Frank Ocean", filter="songs")
+            # 5. Fallback neutral inicial basado en gustos registrados o tendencias
+            init_query = "Top Hits Music Mix"
+            if favorite_artists:
+                init_query = f"{list(favorite_artists)[0]} radio mix"
+            elif favorite_genres:
+                init_query = f"{list(favorite_genres)[0]} mix"
+            initial_results = yt.search(init_query, filter="songs")
             if initial_results:
                 first = initial_results[0]
-                first_artist = first['artists'][0]['name'] if first.get('artists') else "Daniel Caesar"
+                first_artist = first['artists'][0]['name'] if first.get('artists') else "Artista"
                 res_s = {"videoId": first['videoId'], "title": first['title'], "artist": first_artist}
                 played_history.insert(0, res_s)
                 currently_playing_id = res_s['videoId']
@@ -1360,9 +1532,17 @@ def get_history_list(limit: int = 20):
     return played_history[:limit]
 
 @app.post("/dislike/{video_id}")
-def handle_dislike(video_id: str, artist: str):
-    global current_queue, disliked_artists, current_source
-    disliked_artists.add(artist)
+def handle_dislike(video_id: str, artist: str = "", title: Optional[str] = None):
+    global current_queue, disliked_artists, disliked_songs, current_source, favorite_artists, favorite_songs
+    if title:
+        disliked_songs.append({"title": title, "artist": artist})
+    if artist:
+        # Solo vetar artista si no pertenece a los artistas favoritos registrados
+        is_fav = any(artist.lower() == fa.lower() for fa in favorite_artists)
+        if not is_fav:
+            disliked_artists.add(artist)
+
+    purge_disliked_from_queue()
     current_queue = [] 
     current_source = None
     
@@ -1371,16 +1551,30 @@ def handle_dislike(video_id: str, artist: str):
         yt.rate_song(video_id, 'DISLIKE')
     except: pass
 
-    # Intentar rellenar la cola con favoritos/historial dinámico
+    # Intentar rellenar la cola con favoritos/historial dinamico
     success = get_personal_mix()
     
-    # Si no hay mix personal (invitado), preparamos radio coherente del historial anterior o fallback chill
+    # Si no hay mix personal (invitado), preparamos radio basada en los gustos registrados del usuario
     if not success:
         yt = get_yt()
-        prior_artist = played_history[1]['artist'] if len(played_history) > 1 else "Mac Miller"
-        fallback_results = yt.search(f"{prior_artist} chill soul", filter="songs")
-        if fallback_results:
-            set_queue(fallback_results, f"Mix Coherente {prior_artist}")
+        source_id = played_history[1].get('videoId') if (played_history and len(played_history) > 1) else None
+        hybrid_tracks = get_hybrid_recommendations(yt, source_id, limit=20)
+        if hybrid_tracks:
+            set_queue(hybrid_tracks, "Alternativa por Gustos Registrados", clear=True, filter_history=True)
+        else:
+            search_query = "Top Hits Music Mix"
+            if favorite_artists:
+                fav_choice = list(favorite_artists)[0]
+                search_query = f"{fav_choice} radio"
+            elif favorite_genres:
+                search_query = f"{list(favorite_genres)[0]} mix"
+            elif played_history and len(played_history) > 1:
+                prior_artist = played_history[1].get('artist', '')
+                if prior_artist:
+                    search_query = f"{prior_artist} radio"
+            fallback_results = yt.search(search_query, filter="songs")
+            if fallback_results:
+                set_queue(fallback_results, f"Mix Alternativo ({search_query})")
     
     return {"status": "disliked", "has_queue": len(current_queue) > 0}
 
@@ -1406,6 +1600,50 @@ def get_song_lyrics(yt, video_id: str):
 def get_lyrics(video_id: str):
     yt = get_yt()
     return get_song_lyrics(yt, video_id)
+
+class TriviaCachePayload(BaseModel):
+    video_id: str
+    title: Optional[str] = "Unknown"
+    artist: Optional[str] = "Unknown"
+    trivia: str
+
+@app.get("/trivia/cache/{video_id}")
+def get_trivia_cache_endpoint(video_id: str):
+    conn = get_db_connection()
+    if not conn:
+        return {"found": False}
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT trivia FROM song_trivia_cache WHERE video_id = %s LIMIT 1;", (video_id,))
+        row = cur.fetchone()
+        cur.close()
+        release_db_connection(conn)
+        if row:
+            return {"found": True, "trivia": row[0]}
+    except Exception as e:
+        print(f"Error consultando trivia_cache para {video_id}: {e}")
+    return {"found": False}
+
+@app.post("/trivia/cache")
+def save_trivia_cache_endpoint(payload: TriviaCachePayload):
+    conn = get_db_connection()
+    if not conn:
+        return {"status": "error", "message": "DB no disponible"}
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO song_trivia_cache (video_id, title, artist, trivia, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (video_id) DO UPDATE SET
+                trivia = EXCLUDED.trivia;
+        """, (payload.video_id, payload.title or 'Unknown', payload.artist or 'Unknown', payload.trivia))
+        conn.commit()
+        cur.close()
+        release_db_connection(conn)
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"Error guardando trivia_cache para {payload.video_id}: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.post("/playlist/export")
 def export_playlist(title: str = None):
