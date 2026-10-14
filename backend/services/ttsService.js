@@ -2,6 +2,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 const { 
   ELEVENLABS_API_KEY, 
   ELEVENLABS_API_KEY_2, 
@@ -14,6 +15,28 @@ const audioFolder = path.join(__dirname, '..', 'temp_audio');
 // Asegurar que la carpeta temporal exista
 if (!fs.existsSync(audioFolder)) {
   fs.mkdirSync(audioFolder, { recursive: true });
+}
+
+// Mapeo de voces de configuración (ElevenLabs ID) a voces neuronales de Microsoft Edge-TTS en español
+const ELEVENLABS_TO_EDGE_VOICES = {
+  'IKne3meq5aSn9XLyUdCD': 'es-MX-JorgeNeural',   // Charlie (Masculino, Enérgico)
+  'bIHbv24MWmeRgasZH58o': 'es-ES-AlvaroNeural',  // Will (Masculino, Chill)
+  'CwhRBWXzGAHq8TQ4Fs17': 'es-CO-GonzaloNeural', // Roger (Masculino, Grave)
+  'cjVigY5qzO86Huf0OWal': 'es-ES-AlvaroNeural',  // Eric (Masculino, Clásico)
+  'nPczCjzI2devNBz1zQrb': 'es-CO-GonzaloNeural', // Brian (Masculino, Profundo)
+  'cgSgspJ2msm6clMCkdW9': 'es-MX-DaliaNeural',   // Jessica (Femenino, Cálida)
+  'EXAVITQu4vr4xnSDxMaL': 'es-ES-ElviraNeural',  // Sarah (Femenino, Profesional)
+  'FGY2WhTYpPnrIDTdsKH5': 'es-CO-SalomeNeural'   // Laura (Femenino, Entusiasta)
+};
+
+function resolveEdgeVoice(voiceId) {
+  if (voiceId && ELEVENLABS_TO_EDGE_VOICES[voiceId]) {
+    return ELEVENLABS_TO_EDGE_VOICES[voiceId];
+  }
+  if (voiceId && typeof voiceId === 'string' && voiceId.startsWith('es-')) {
+    return voiceId;
+  }
+  return 'es-MX-JorgeNeural';
 }
 
 let activeKeyIndex = 0;
@@ -66,28 +89,87 @@ function isQuotaError(error) {
   return false;
 }
 
-async function generateTTS(text, customVoiceId = null) {
+async function generateEdgeTTS(text, customVoiceId = null) {
   if (!text || !text.trim()) return null;
+  const edgeVoice = resolveEdgeVoice(customVoiceId);
+  const cleanText = text.trim().toLowerCase().replace(/\s+/g, ' ');
+  const textHash = crypto.createHash('md5').update(`edge_${edgeVoice}_${cleanText}`).digest('hex');
+  const fileName = `tts_edge_${textHash}.mp3`;
+  const filePath = path.join(audioFolder, fileName);
+
+  if (fs.existsSync(filePath)) {
+    try {
+      const stats = fs.statSync(filePath);
+      if (stats.size > 100) {
+        console.log(`[EDGE-TTS CACHE HIT - $0]: "${text.slice(0, 35)}..." reutilizado de caché local.`);
+        return `/audio/${fileName}`;
+      }
+    } catch (e) {}
+  }
+
+  try {
+    console.log(`Generando voz con Edge-TTS (${edgeVoice})... (Texto: "${text.slice(0, 50)}...")`);
+    const tts = new MsEdgeTTS();
+    await tts.setMetadata(edgeVoice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
+    const readable = tts.toStream(text);
+
+    await new Promise((resolve, reject) => {
+      const writeStream = fs.createWriteStream(filePath);
+      readable.audioStream.pipe(writeStream);
+      readable.audioStream.on('error', reject);
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+    });
+
+    const stats = fs.statSync(filePath);
+    if (stats.size > 100) {
+      console.log(`Voz Edge-TTS generada y guardada en caché: ${fileName} (${stats.size} bytes)`);
+      return `/audio/${fileName}`;
+    } else {
+      console.warn(`Archivo generado por Edge-TTS es muy pequeño (${stats.size} bytes), eliminando.`);
+      try { fs.unlinkSync(filePath); } catch (e) {}
+      return null;
+    }
+  } catch (error) {
+    console.error("Error al generar voz con Edge-TTS:", error.message);
+    if (fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath); } catch (e) {}
+    }
+    return null;
+  }
+}
+
+async function generateTTS(text, customVoiceId = null, options = { mode: 'vip' }) {
+  if (!text || !text.trim()) return null;
+  const mode = (typeof options === 'object' && options?.mode) ? options.mode : (typeof options === 'string' ? options : 'vip');
+
+  // Modo transicion: presentaciones rutinarias entre canciones con Edge-TTS (0 cuota ElevenLabs)
+  if (mode === 'transition') {
+    console.log(`[TTS HÍBRIDO - TRANSICIÓN]: Presentación rutinaria detectada -> Usando Edge-TTS (cero cuota ElevenLabs).`);
+    return await generateEdgeTTS(text, customVoiceId);
+  }
+
+  // Modo VIP: interacción manual en el chat
   const keys = getElevenLabsKeys();
   if (keys.length === 0) {
-    console.warn("Advertencia: No hay ninguna ELEVENLABS_API_KEY configurada.");
-    return null;
+    console.warn("Advertencia: No hay ninguna ELEVENLABS_API_KEY configurada. Conmutando automáticamente a Edge-TTS.");
+    return await generateEdgeTTS(text, customVoiceId);
   }
 
   const voiceToUse = (customVoiceId && customVoiceId.trim()) || process.env.ELEVENLABS_VOICE_ID || ELEVENLABS_VOICE_ID;
 
-  // Normalizar texto para clave de caché
+  // Normalizar texto para clave de caché ElevenLabs
   const cleanText = text.trim().toLowerCase().replace(/\s+/g, ' ');
   const textHash = crypto.createHash('md5').update(`${voiceToUse}_${cleanText}`).digest('hex');
   const fileName = `tts_cache_${textHash}.mp3`;
   const filePath = path.join(audioFolder, fileName);
 
-  // 1. Si ya existe en caché, retornarlo inmediatamente (0 llamadas a la API)
+  // 1. Si ya existe en caché de ElevenLabs, retornarlo inmediatamente
   if (fs.existsSync(filePath)) {
     try {
       const stats = fs.statSync(filePath);
       if (stats.size > 100) {
-        console.log(`[TTS CACHE HIT - $0]: "${text.slice(0, 35)}..." reutilizado de caché local.`);
+        console.log(`[ELEVENLABS CACHE HIT - $0]: "${text.slice(0, 35)}..." reutilizado de caché local.`);
         return `/audio/${fileName}`;
       }
     } catch (e) {}
@@ -96,8 +178,8 @@ async function generateTTS(text, customVoiceId = null) {
   // Comprobar si todas las claves ya están agotadas
   const availableKeys = keys.filter(k => !exhaustedKeys.has(k));
   if (availableKeys.length === 0) {
-    console.warn("[ElevenLabs]: Todas las claves han agotado su cuota mensual. Usando voz del navegador.");
-    return null;
+    console.warn("[ElevenLabs]: Todas las claves han agotado su cuota mensual. Conmutando automáticamente a Edge-TTS como respaldo.");
+    return await generateEdgeTTS(text, customVoiceId);
   }
 
   // Asegurar que activeKeyIndex apunte a una clave no agotada
@@ -116,8 +198,8 @@ async function generateTTS(text, customVoiceId = null) {
     if (exhaustedKeys.has(currentKey)) {
       const nextIdx = keys.findIndex(k => !exhaustedKeys.has(k));
       if (nextIdx === -1) {
-        console.warn("[ElevenLabs]: Todas las claves han agotado su cuota mensual. Usando voz del navegador.");
-        return null;
+        console.warn("[ElevenLabs]: Todas las claves han agotado su cuota mensual. Conmutando automáticamente a Edge-TTS como respaldo.");
+        return await generateEdgeTTS(text, customVoiceId);
       }
       activeKeyIndex = nextIdx;
       continue;
@@ -126,7 +208,7 @@ async function generateTTS(text, customVoiceId = null) {
     attempts++;
 
     try {
-      console.log(`Generando voz con ElevenLabs (Clave ${activeKeyIndex + 1}/${keys.length} ${maskKey(currentKey)})... (Texto: "${text}")`);
+      console.log(`Generando voz VIP con ElevenLabs (Clave ${activeKeyIndex + 1}/${keys.length} ${maskKey(currentKey)})... (Texto: "${text}")`);
       const response = await axios.post(`https://api.elevenlabs.io/v1/text-to-speech/${voiceToUse}?optimize_streaming_latency=3`, {
         text: text,
         model_id: "eleven_flash_v2_5",
@@ -138,7 +220,7 @@ async function generateTTS(text, customVoiceId = null) {
       });
 
       fs.writeFileSync(filePath, response.data);
-      console.log(`Voz generada y guardada en caché: ${fileName}`);
+      console.log(`Voz VIP generada y guardada en caché: ${fileName}`);
       return `/audio/${fileName}`;
     } catch (error) {
       if (isQuotaError(error)) {
@@ -150,11 +232,11 @@ async function generateTTS(text, customVoiceId = null) {
         if (remaining.length > 0) {
           const nextIdx = keys.findIndex(k => !exhaustedKeys.has(k));
           activeKeyIndex = nextIdx;
-          console.log(`[ElevenLabs]: Cambiando automáticamente a clave ${activeKeyIndex + 1} (${maskKey(keys[activeKeyIndex])}) para esta y las siguientes canciones.`);
+          console.log(`[ElevenLabs]: Cambiando automáticamente a clave ${activeKeyIndex + 1} (${maskKey(keys[activeKeyIndex])})...`);
           continue;
         } else {
-          console.warn("[ElevenLabs]: Cuota agotada en todas las cuentas de ElevenLabs configuradas. Usando voz del navegador.");
-          return null;
+          console.warn("[ElevenLabs]: Cuota agotada en todas las cuentas de ElevenLabs configuradas. Conmutando automáticamente a Edge-TTS.");
+          return await generateEdgeTTS(text, customVoiceId);
         }
       } else {
         if (error.response) {
@@ -163,16 +245,21 @@ async function generateTTS(text, customVoiceId = null) {
         } else {
           console.error("Error de red con ElevenLabs:", error.message);
         }
-        return null;
+        console.warn("[ElevenLabs]: Conmutando a Edge-TTS tras fallo en ElevenLabs.");
+        return await generateEdgeTTS(text, customVoiceId);
       }
     }
   }
 
-  return null;
+  console.warn("[ElevenLabs]: Intentos agotados. Conmutando a Edge-TTS.");
+  return await generateEdgeTTS(text, customVoiceId);
 }
 
 module.exports = {
   generateTTS,
+  generateEdgeTTS,
+  resolveEdgeVoice,
+  ELEVENLABS_TO_EDGE_VOICES,
   audioFolder,
   getElevenLabsKeys
 };

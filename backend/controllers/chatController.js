@@ -294,7 +294,7 @@ PERFIL DE GUSTOS Y RESTRICCIONES DEL USUARIO:
         djComment = djDecision?.locucion || (isDislike
           ? `¡Sin problema! Dejamos esa atrás y seguimos con ${nextSong.title} de ${songArtist}.`
           : `¡Seguimos con ${songArtist} y su tema ${nextSong.title}!`);
-        audioUrl = await generateTTS(djComment, voice_id);
+        audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip' });
       }
 
       return res.json({ dj_comment: djComment, audioUrl, nextSong });
@@ -547,7 +547,7 @@ REGLAS OBLIGATORIAS:
         }
 
         // Generar locución de voz después de confirmar la canción real
-        audioUrl = await generateTTS(djComment, voice_id);
+        audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip' });
 
         // Precargar letras de inmediato para que la primera canción también tenga traducción lista
         preloadSongLyrics(nextSong.videoId, nextSong.title, nextSong.artist).catch(() => {});
@@ -567,11 +567,11 @@ REGLAS OBLIGATORIAS:
           nextSong.globalRepeatCount = 1;
         }
       } else {
-        audioUrl = await generateTTS(djComment, voice_id);
+        audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip' });
       }
     } else {
       nextSong = null;
-      audioUrl = await generateTTS(djComment, voice_id);
+      audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip' });
     }
 
     res.json({ 
@@ -627,10 +627,10 @@ async function handlePreload(req, res) {
       );
       const djDecision = await getDJDecision("Presenta el siguiente tema que cerrará el bloque", introPrompt);
       djComment = djDecision?.locucion || `¡A continuación, ${songArtist} con ${candidate.title}!`;
-      audioUrl = await generateTTS(djComment, voice_id);
-      console.log(`[PRELOAD CON VOZ Y TRIVIA]: "${candidate.title}" - ${songArtist}`);
+      audioUrl = await generateTTS(djComment, voice_id, { mode: 'transition' });
+      console.log(`[PRELOAD TRANSICIÓN EDGE-TTS]: "${candidate.title}" - ${songArtist}`);
     } else {
-      console.log(`[PRELOAD SILENCIOSO - AHORRANDO ELEVENLABS]: "${candidate.title}" (${chatState.count + 1}/${targetFrequency || 'Solo Chat'})`);
+      console.log(`[PRELOAD SILENCIOSO]: "${candidate.title}" (${chatState.count + 1}/${targetFrequency || 'Solo Chat'})`);
     }
 
     // Precargar letras y traducción en segundo plano antes de que la canción comience a sonar
@@ -689,7 +689,7 @@ async function handleVoicePreview(req, res) {
     if (!voice_id || !text) {
       return res.status(400).json({ error: "voice_id y text son requeridos" });
     }
-    const audioUrl = await generateTTS(text, voice_id);
+    const audioUrl = await generateTTS(text, voice_id, { mode: 'vip' });
     if (!audioUrl) {
       return res.status(500).json({ error: "No se pudo generar la muestra de voz" });
     }
