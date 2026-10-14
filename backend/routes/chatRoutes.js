@@ -38,9 +38,33 @@ const {
   handleFallbackVideo
 } = require('../controllers/mediaController');
 
+const {
+  handleGetStatus,
+  handleQueuePop,
+  handleQueueRefill,
+  handleQueueStepBack,
+  handleQueueAdd,
+  handleQueueMove,
+  handleQueueRemove,
+  handleDislike,
+  handleLike
+} = require('../controllers/queueController');
+
 router.post('/chat', handleChat);
 router.post('/preload', handlePreload);
 router.post('/session/transition', handleSessionTransition);
+
+// Rutas de API Gateway para Estado y Cola (unificadas en puerto 3001)
+router.get('/status', handleGetStatus);
+router.post('/queue/pop', handleQueuePop);
+router.post('/queue/refill', handleQueueRefill);
+router.post('/queue/step_back', handleQueueStepBack);
+router.post('/queue/add', handleQueueAdd);
+router.post('/queue/move/:videoId', handleQueueMove);
+router.post('/queue/remove/:videoId', handleQueueRemove);
+router.post('/like/:videoId', handleLike);
+router.post('/dislike/:videoId', handleDislike);
+router.post('/dislike', handleDislike);
 
 // Ruta para preview de voz del locutor
 router.post('/voice/preview', handleVoicePreview);

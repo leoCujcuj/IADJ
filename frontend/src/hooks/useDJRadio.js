@@ -207,7 +207,8 @@ export default function useDJRadio() {
     sessionId,
     syncStatus: () => syncStatus(),
     handleSendMessage: (e, text) => handleSendMessage(e, text),
-    onClearPreload: clearPreload
+    onClearPreload: clearPreload,
+    tasteProfile: tasteProfileRef.current || tasteProfile
   });
 
   // Comparador de lista de canciones para evitar re-renders innecesarios
@@ -225,7 +226,7 @@ export default function useDJRadio() {
 
   const syncStatus = useCallback(async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/status');
+      const res = await fetch('http://127.0.0.1:3001/api/status');
       const data = await res.json();
       const newStatus = data.status === 'logeado';
       setIsConnected(prev => prev !== newStatus ? newStatus : prev);
@@ -578,7 +579,7 @@ export default function useDJRadio() {
       const nextSong = queueRef.current[0];
       if (nextSong && nextSong.videoId && !blockedVideoIdsRef.current.has(nextSong.videoId)) {
         setQueue(prev => prev.slice(1));
-        fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' }).catch(() => {});
+        fetch('http://127.0.0.1:3001/api/queue/pop', { method: 'POST' }).catch(() => {});
         playNextWithReplayCheck(nextSong);
         return;
       }
@@ -589,14 +590,14 @@ export default function useDJRadio() {
       preloadedDataRef.current = null;
       preloadTriggeredRef.current = null;
       if (nextSong && nextSong.videoId && !blockedVideoIdsRef.current.has(nextSong.videoId)) {
-        fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' }).catch(() => {});
+        fetch('http://127.0.0.1:3001/api/queue/pop', { method: 'POST' }).catch(() => {});
         playNextWithReplayCheck(nextSong);
         return;
       }
     }
 
     try {
-      const res = await fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' });
+      const res = await fetch('http://127.0.0.1:3001/api/queue/pop', { method: 'POST' });
       const nextSong = await res.json();
       if (nextSong && nextSong.videoId && !nextSong.error && !blockedVideoIdsRef.current.has(nextSong.videoId)) {
         playNextWithReplayCheck(nextSong);
@@ -607,8 +608,8 @@ export default function useDJRadio() {
     }
 
     try {
-      await fetch('http://127.0.0.1:8000/queue/refill', { method: 'POST' });
-      const res2 = await fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' });
+      await fetch('http://127.0.0.1:3001/api/queue/refill', { method: 'POST' });
+      const res2 = await fetch('http://127.0.0.1:3001/api/queue/pop', { method: 'POST' });
       const nextSong2 = await res2.json();
       if (nextSong2 && nextSong2.videoId && !nextSong2.error) {
         playNextWithReplayCheck(nextSong2);
@@ -655,9 +656,9 @@ export default function useDJRadio() {
         setQueue(prev => [curr, ...prev.filter(s => s.videoId !== curr.videoId)]);
       }
 
-      // Notificar a Python para sincronizar queue y history en el backend inmediatamente
+      // Notificar a Node.js API Gateway para sincronizar queue y history inmediatamente
       try {
-        await fetch('http://127.0.0.1:8000/queue/step_back', {
+        await fetch('http://127.0.0.1:3001/api/queue/step_back', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -691,12 +692,12 @@ export default function useDJRadio() {
 
       if (removedVideoIdsRef.current.has(nextSong.videoId) || 
           (currentSongRef.current && nextSong.videoId === currentSongRef.current.videoId)) {
-        fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' }).catch(() => {});
+        fetch('http://127.0.0.1:3001/api/queue/pop', { method: 'POST' }).catch(() => {});
         handleNext();
         return;
       }
 
-      fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' }).catch(() => {});
+      fetch('http://127.0.0.1:3001/api/queue/pop', { method: 'POST' }).catch(() => {});
 
       if (dj_comment) {
         setChatHistory(prev => [...prev, { sender: 'dj', text: dj_comment }]);
@@ -716,7 +717,7 @@ export default function useDJRadio() {
   const skipToNextImmediately = useCallback(async () => {
     try {
       console.log("[YouTube Error Handler]: Saltando de inmediato a la siguiente pista de la cola...");
-      const res = await fetch('http://127.0.0.1:8000/queue/pop', { method: 'POST' });
+      const res = await fetch('http://127.0.0.1:3001/api/queue/pop', { method: 'POST' });
       const nextSong = await res.json();
       if (nextSong && nextSong.videoId && !blockedVideoIdsRef.current.has(nextSong.videoId)) {
         playTrack(nextSong, { isBackTrack: false, djVoice: null });
@@ -770,7 +771,7 @@ export default function useDJRadio() {
     if (!trimmed) return;
     
     try {
-      const res = await fetch(`http://127.0.0.1:8000/queue/add?q=${encodeURIComponent(trimmed)}`, { method: 'POST' });
+      const res = await fetch(`http://127.0.0.1:3001/api/queue/add?q=${encodeURIComponent(trimmed)}`, { method: 'POST' });
       const data = await res.json();
       if (data && data.error) {
         showAlert({
@@ -813,7 +814,7 @@ export default function useDJRadio() {
     });
 
     try {
-      await fetch(`http://127.0.0.1:8000/queue/move/${videoId}?to_index=${toIndex}`, { method: 'POST' });
+      await fetch(`http://127.0.0.1:3001/api/queue/move/${videoId}?to_index=${toIndex}`, { method: 'POST' });
       await syncStatus();
 
       if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
@@ -858,7 +859,7 @@ export default function useDJRadio() {
     }
 
     try {
-      await fetch(`http://127.0.0.1:8000/queue/remove/${videoId}`, { method: 'POST' });
+      await fetch(`http://127.0.0.1:3001/api/queue/remove/${videoId}`, { method: 'POST' });
       await syncStatus();
 
       if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
@@ -1137,7 +1138,7 @@ export default function useDJRadio() {
     preloadTriggeredRef.current = null;
     preloadedDataRef.current = null;
 
-    fetch(`http://127.0.0.1:8000/history/record/${currentSong.videoId}`, { method: 'POST' }).catch(() => {});
+    fetch(`http://127.0.0.1:3001/api/history/record/${currentSong.videoId}`, { method: 'POST' }).catch(() => {});
 
     fetch(`http://127.0.0.1:3001/api/favorites/count/${currentSong.videoId}?session_id=${encodeURIComponent(sessionId)}`)
       .then(res => res.json())

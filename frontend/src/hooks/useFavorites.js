@@ -3,7 +3,7 @@ import { useState, useCallback } from 'react';
 /**
  * Hook modular para gestion de canciones favoritas, repeticiones y acciones de Like/Dislike.
  */
-export default function useFavorites({ currentSong, sessionId, syncStatus, handleSendMessage, onClearPreload }) {
+export default function useFavorites({ currentSong, sessionId, syncStatus, handleSendMessage, onClearPreload, tasteProfile }) {
   const [repeatCount, setRepeatCount] = useState(0);
   const [globalRepeatCount, setGlobalRepeatCount] = useState(0);
   const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
@@ -54,7 +54,7 @@ export default function useFavorites({ currentSong, sessionId, syncStatus, handl
     setRepeatCount(prev => prev + 1);
     setGlobalRepeatCount(prev => prev + 1);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/like/${currentSong.videoId}?artist=${encodeURIComponent(currentSong.artist)}&current_title=${encodeURIComponent(currentSong.title)}&session_id=${encodeURIComponent(sessionId)}`, { 
+      const res = await fetch(`http://127.0.0.1:3001/api/like/${currentSong.videoId}?artist=${encodeURIComponent(currentSong.artist)}&current_title=${encodeURIComponent(currentSong.title)}&session_id=${encodeURIComponent(sessionId)}`, { 
         method: 'POST' 
       });
       const data = await res.json();
@@ -90,23 +90,40 @@ export default function useFavorites({ currentSong, sessionId, syncStatus, handl
     }
 
     try {
-      await fetch(`http://127.0.0.1:8000/dislike/${currentSong.videoId}?artist=${encodeURIComponent(currentSong.artist)}`, { 
+      const artParam = encodeURIComponent(currentSong.artist || '');
+      const titleParam = encodeURIComponent(currentSong.title || '');
+      await fetch(`http://127.0.0.1:3001/api/dislike/${currentSong.videoId}?artist=${artParam}&title=${titleParam}`, { 
         method: 'POST' 
       });
 
       if (handleSendMessage) {
+        const hasRegisteredTastes = (
+          (Array.isArray(tasteProfile?.favorite_artists) && tasteProfile.favorite_artists.length > 0) ||
+          (Array.isArray(tasteProfile?.favorite_songs) && tasteProfile.favorite_songs.length > 0) ||
+          (Array.isArray(tasteProfile?.favorite_genres) && tasteProfile.favorite_genres.length > 0)
+        );
+
         if (newStreak >= 3) {
-          handleSendMessage(null, "He dado dislike a varias canciones seguidas. DJ, cambia totalmente de estilo y recomiéndame algo diferente.");
+          if (hasRegisteredTastes) {
+            handleSendMessage(null, "He dado dislike a varias canciones seguidas. DJ, cámbiala y ponme una canción basada en mis artistas o canciones favoritas registradas.");
+          } else {
+            handleSendMessage(null, "He dado dislike a varias canciones seguidas. DJ, cambia totalmente de estilo y recomiéndame algo diferente.");
+          }
           setDislikeStreak(0);
         } else {
-          handleSendMessage(null, "He dado dislike. Siguiente canción DJ.");
+          const songText = currentSong.title ? ` a "${currentSong.title}"` : '';
+          if (hasRegisteredTastes) {
+            handleSendMessage(null, `He dado dislike${songText}. DJ, cámbiala y ponme una canción basada en mis gustos registrados.`);
+          } else {
+            handleSendMessage(null, `He dado dislike${songText}. DJ, cámbiala y recomiéndame algo bueno.`);
+          }
         }
       }
     } catch (e) { 
       setIsDisliked(false); 
       console.error(e); 
     }
-  }, [currentSong, isDisliked, dislikeStreak, handleSendMessage, onClearPreload]);
+  }, [currentSong, isDisliked, dislikeStreak, handleSendMessage, onClearPreload, tasteProfile]);
 
   return {
     repeatCount,
