@@ -10,6 +10,9 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
   const [isTranslating, setIsTranslating] = useState(false);
   const [activeIdx, setActiveIdx] = useState(-1);
 
+  // Offset manual de sincronización en segundos (ej: -0.5s, +0.2s)
+  const [syncOffset, setSyncOffset] = useState(0);
+
   // Modo: 'bilingual' (Original + Español), 'original', 'translation' (Solo Español)
   const [displayMode, setDisplayMode] = useState(() => {
     return localStorage.getItem('lyrics_display_mode') || 'bilingual';
@@ -17,6 +20,47 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
 
   const listRef = useRef(null);
   const activeLineRef = useRef(null);
+  const activeIdxRef = useRef(-1);
+  const syncOffsetRef = useRef(0);
+
+  useEffect(() => {
+    activeIdxRef.current = activeIdx;
+  }, [activeIdx]);
+
+  useEffect(() => {
+    syncOffsetRef.current = syncOffset;
+  }, [syncOffset]);
+
+  // Cargar offset guardado específico para la canción actual
+  useEffect(() => {
+    if (!currentSong?.videoId) {
+      setSyncOffset(0);
+      return;
+    }
+    const saved = localStorage.getItem(`lyrics_offset_${currentSong.videoId}`);
+    setSyncOffset(saved ? parseFloat(saved) : 0);
+  }, [currentSong?.videoId]);
+
+  const handleAdjustOffset = (delta) => {
+    setSyncOffset(prev => {
+      const next = Math.round((prev + delta) * 10) / 10;
+      if (currentSong?.videoId) {
+        if (next === 0) {
+          localStorage.removeItem(`lyrics_offset_${currentSong.videoId}`);
+        } else {
+          localStorage.setItem(`lyrics_offset_${currentSong.videoId}`, next.toString());
+        }
+      }
+      return next;
+    });
+  };
+
+  const handleResetOffset = () => {
+    setSyncOffset(0);
+    if (currentSong?.videoId) {
+      localStorage.removeItem(`lyrics_offset_${currentSong.videoId}`);
+    }
+  };
 
   const triggerTranslation = (songVideoId, linesToTranslate, isKaraoke) => {
     if (!songVideoId || isTranslating || linesToTranslate.length === 0) return;
@@ -65,7 +109,7 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
     }
   };
 
-  // Carga ultra-rápida (<200ms) de letras al abrir o al cambiar de canción
+  // Carga de letras al abrir o al cambiar de canción con duración precisa
   useEffect(() => {
     if (!isOpen || !currentSong?.videoId) return;
 
@@ -77,53 +121,73 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
     setIsSynced(false);
     setActiveIdx(-1);
 
-    const params = new URLSearchParams();
-    if (currentSong.title) params.append('title', currentSong.title);
-    if (currentSong.artist) params.append('artist', currentSong.artist);
+    const fetchLyrics = () => {
+      let durationSec = null;
+      if (playerRef?.current && typeof playerRef.current.getDuration === 'function') {
+        const pDur = playerRef.current.getDuration();
+        if (pDur && pDur > 0) durationSec = Math.round(pDur);
+      }
+      if (!durationSec && currentSong.duration_seconds) {
+        durationSec = Math.round(currentSong.duration_seconds);
+      }
 
-    fetch(`http://127.0.0.1:3001/api/lyrics/${currentSong.videoId}?${params.toString()}`)
-      .then(res => res.json())
-      .then(data => {
-        if (!isMounted) return;
-        setLoading(false);
+      const params = new URLSearchParams();
+      if (currentSong.title) params.append('title', currentSong.title);
+      if (currentSong.artist) params.append('artist', currentSong.artist);
+      if (durationSec) params.append('duration', durationSec);
 
-        if (data.isSynced && Array.isArray(data.lines) && data.lines.length > 0) {
-          setSyncedLines(data.lines);
-          setIsSynced(true);
-          setSource(data.source || 'Karaoke Sincronizado');
+      fetch(`http://127.0.0.1:3001/api/lyrics/${currentSong.videoId}?${params.toString()}`)
+        .then(res => res.json())
+        .then(data => {
+          if (!isMounted) return;
+          setLoading(false);
 
-          // Si no tiene traducción aún, pedirla en segundo plano sin bloquear el karaoke
-          if (!data.hasTranslation) {
-            triggerTranslation(currentSong.videoId, data.lines.map(l => l.text), true);
-          }
-        } else if (Array.isArray(data.plainLines) && data.plainLines.length > 0) {
-          setPlainLines(data.plainLines);
-          setIsSynced(false);
-          setSource(data.source || 'YouTube Music');
+          if (data.isSynced && Array.isArray(data.lines) && data.lines.length > 0) {
+            setSyncedLines(data.lines);
+            setIsSynced(true);
+            setSource(data.source || 'Karaoke Sincronizado');
 
-          if (!data.hasTranslation) {
-            const nonEmpties = data.plainLines.filter(l => l.text?.trim()).map(l => l.text);
-            if (nonEmpties.length > 0) {
-              triggerTranslation(currentSong.videoId, nonEmpties, false);
+            if (!data.hasTranslation) {
+              triggerTranslation(currentSong.videoId, data.lines.map(l => l.text), true);
             }
+          } else if (Array.isArray(data.plainLines) && data.plainLines.length > 0) {
+            setPlainLines(data.plainLines);
+            setIsSynced(false);
+            setSource(data.source || 'YouTube Music');
+
+            if (!data.hasTranslation) {
+              const nonEmpties = data.plainLines.filter(l => l.text?.trim()).map(l => l.text);
+              if (nonEmpties.length > 0) {
+                triggerTranslation(currentSong.videoId, nonEmpties, false);
+              }
+            }
+          } else {
+            setSyncedLines([]);
+            setPlainLines([]);
           }
-        } else {
-          setSyncedLines([]);
-          setPlainLines([]);
-        }
-      })
-      .catch(err => {
-        if (!isMounted) return;
-        console.error('Error cargando letras:', err);
-        setLoading(false);
-      });
+        })
+        .catch(err => {
+          if (!isMounted) return;
+          console.error('Error cargando letras:', err);
+          setLoading(false);
+        });
+    };
+
+    let timer = null;
+    const initialDur = playerRef?.current?.getDuration?.();
+    if (!initialDur && playerRef?.current) {
+      timer = setTimeout(fetchLyrics, 300);
+    } else {
+      fetchLyrics();
+    }
 
     return () => {
       isMounted = false;
+      if (timer) clearTimeout(timer);
     };
   }, [isOpen, currentSong?.videoId, currentSong?.title, currentSong?.artist]);
 
-  // Ticker de sincronización en tiempo real con YouTube Player (Karaoke)
+  // Ticker de sincronización en tiempo real con YouTube Player (Karaoke) cada 100ms
   useEffect(() => {
     if (!isOpen || !isSynced || syncedLines.length === 0) return;
 
@@ -132,23 +196,26 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
 
       try {
         const currentTime = playerRef.current.getCurrentTime();
+        if (typeof currentTime !== 'number' || isNaN(currentTime)) return;
+
+        const effectiveTime = currentTime + syncOffsetRef.current;
         let currentIdx = -1;
         for (let i = 0; i < syncedLines.length; i++) {
-          if (currentTime >= syncedLines[i].time - 0.2) {
+          if (effectiveTime >= syncedLines[i].time) {
             currentIdx = i;
           } else {
             break;
           }
         }
 
-        if (currentIdx !== -1 && currentIdx !== activeIdx) {
+        if (currentIdx !== activeIdxRef.current) {
           setActiveIdx(currentIdx);
         }
       } catch (e) {}
-    }, 200);
+    }, 100);
 
     return () => clearInterval(interval);
-  }, [isOpen, isSynced, syncedLines, activeIdx, playerRef]);
+  }, [isOpen, isSynced, syncedLines, playerRef]);
 
   // Auto-scroll suave de la línea activa al centro de la vista
   useEffect(() => {
@@ -160,10 +227,11 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
     }
   }, [activeIdx, isSynced]);
 
-  // Saltar en el reproductor al hacer clic en un verso
+  // Saltar en el reproductor al hacer clic en un verso compensando el offset
   const handleSeek = (time) => {
     if (playerRef?.current && typeof playerRef.current.seekTo === 'function') {
-      playerRef.current.seekTo(time, true);
+      const targetTime = Math.max(0, time - syncOffsetRef.current);
+      playerRef.current.seekTo(targetTime, true);
     }
   };
 
@@ -235,6 +303,62 @@ export default function LyricsSidebar({ isOpen, onClose, currentSong, playerRef 
               title="Mostrar solo el idioma original (inglés)"
             >
               Original (Inglés)
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Barra de calibración de sincronización Karaoke */}
+      {isSynced && syncedLines.length > 0 && (
+        <div className="lyrics-sync-bar">
+          <div className="sync-bar-label">
+            <span>Sincronización:</span>
+            <span className={`sync-offset-val ${syncOffset !== 0 ? 'modified' : ''}`}>
+              {syncOffset > 0 ? `+${syncOffset.toFixed(1)}s` : `${syncOffset.toFixed(1)}s`}
+            </span>
+          </div>
+          <div className="sync-buttons">
+            <button
+              type="button"
+              className="sync-step-btn"
+              onClick={() => handleAdjustOffset(-0.5)}
+              title="Atrasar letra 0.5s"
+            >
+              -0.5s
+            </button>
+            <button
+              type="button"
+              className="sync-step-btn"
+              onClick={() => handleAdjustOffset(-0.2)}
+              title="Atrasar letra 0.2s"
+            >
+              -0.2s
+            </button>
+            {syncOffset !== 0 && (
+              <button
+                type="button"
+                className="sync-step-btn reset"
+                onClick={handleResetOffset}
+                title="Restablecer sincronización a 0.0s"
+              >
+                0.0s
+              </button>
+            )}
+            <button
+              type="button"
+              className="sync-step-btn"
+              onClick={() => handleAdjustOffset(0.2)}
+              title="Adelantar letra 0.2s"
+            >
+              +0.2s
+            </button>
+            <button
+              type="button"
+              className="sync-step-btn"
+              onClick={() => handleAdjustOffset(0.5)}
+              title="Adelantar letra 0.5s"
+            >
+              +0.5s
             </button>
           </div>
         </div>
