@@ -1,28 +1,39 @@
 const axios = require('axios');
+const http = require('http');
 const { PYTHON_SERVICE_URL } = require('../config/constants');
 
 /**
  * Controlador de Cola y Estado del Reproductor (API Gateway para Python Music Service)
+ * Utiliza keepAlive: false para prevenir errores de 'socket hang up' generados por cierre de sockets inactivos en Uvicorn.
  */
+const pythonClient = axios.create({
+  baseURL: PYTHON_SERVICE_URL,
+  httpAgent: new http.Agent({ keepAlive: false })
+});
 
 async function handleGetStatus(req, res) {
-  try {
-    const response = await axios.get(`${PYTHON_SERVICE_URL}/status`, { timeout: 4000 });
-    return res.json(response.data);
-  } catch (error) {
-    console.error("Gateway /status error:", error.message);
-    return res.status(502).json({
-      status: "error",
-      queue: [],
-      history: [],
-      error: "Servicio de música no disponible"
-    });
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await pythonClient.get('/status', { timeout: 6000 });
+      return res.json(response.data);
+    } catch (error) {
+      if (attempt === 1 && (error.code === 'ECONNRESET' || error.message.includes('socket hang up') || error.code === 'ETIMEDOUT')) {
+        await new Promise(r => setTimeout(r, 100));
+        continue;
+      }
+      console.error("Gateway /status error:", error.message);
+      // No devolver queue: [] en caso de error para evitar que el frontend limpie la cola visible del usuario
+      return res.status(503).json({
+        status: "error",
+        error: "Servicio de música temporalmente no disponible"
+      });
+    }
   }
 }
 
 async function handleQueuePop(req, res) {
   try {
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/queue/pop`, {}, { timeout: 5000 });
+    const response = await pythonClient.post('/queue/pop', {}, { timeout: 6000 });
     return res.json(response.data);
   } catch (error) {
     console.error("Gateway /queue/pop error:", error.message);
@@ -32,7 +43,7 @@ async function handleQueuePop(req, res) {
 
 async function handleQueueRefill(req, res) {
   try {
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/queue/refill`, {}, { timeout: 6000 });
+    const response = await pythonClient.post('/queue/refill', {}, { timeout: 8000 });
     return res.json(response.data);
   } catch (error) {
     console.error("Gateway /queue/refill error:", error.message);
@@ -42,7 +53,7 @@ async function handleQueueRefill(req, res) {
 
 async function handleQueueStepBack(req, res) {
   try {
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/queue/step_back`, req.body, { timeout: 4000 });
+    const response = await pythonClient.post('/queue/step_back', req.body, { timeout: 5000 });
     return res.json(response.data);
   } catch (error) {
     console.error("Gateway /queue/step_back error:", error.message);
@@ -52,9 +63,9 @@ async function handleQueueStepBack(req, res) {
 
 async function handleQueueAdd(req, res) {
   try {
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/queue/add`, null, {
+    const response = await pythonClient.post('/queue/add', null, {
       params: req.query,
-      timeout: 6000
+      timeout: 7000
     });
     return res.json(response.data);
   } catch (error) {
@@ -66,9 +77,9 @@ async function handleQueueAdd(req, res) {
 async function handleQueueMove(req, res) {
   try {
     const { videoId } = req.params;
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/queue/move/${videoId}`, null, {
+    const response = await pythonClient.post(`/queue/move/${videoId}`, null, {
       params: req.query,
-      timeout: 4000
+      timeout: 5000
     });
     return res.json(response.data);
   } catch (error) {
@@ -80,7 +91,7 @@ async function handleQueueMove(req, res) {
 async function handleQueueRemove(req, res) {
   try {
     const { videoId } = req.params;
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/queue/remove/${videoId}`, {}, { timeout: 4000 });
+    const response = await pythonClient.post(`/queue/remove/${videoId}`, {}, { timeout: 5000 });
     return res.json(response.data);
   } catch (error) {
     console.error("Gateway /queue/remove error:", error.message);
@@ -91,9 +102,9 @@ async function handleQueueRemove(req, res) {
 async function handleLike(req, res) {
   try {
     const { videoId } = req.params;
-    const response = await axios.post(`${PYTHON_SERVICE_URL}/like/${videoId}`, null, {
+    const response = await pythonClient.post(`/like/${videoId}`, null, {
       params: req.query,
-      timeout: 5000
+      timeout: 6000
     });
     return res.json(response.data);
   } catch (error) {
@@ -105,10 +116,10 @@ async function handleLike(req, res) {
 async function handleDislike(req, res) {
   try {
     const videoId = req.params.videoId || '';
-    const endpoint = videoId ? `${PYTHON_SERVICE_URL}/dislike/${videoId}` : `${PYTHON_SERVICE_URL}/dislike`;
-    const response = await axios.post(endpoint, null, {
+    const endpoint = videoId ? `/dislike/${videoId}` : `/dislike`;
+    const response = await pythonClient.post(endpoint, null, {
       params: req.query,
-      timeout: 5000
+      timeout: 6000
     });
     return res.json(response.data);
   } catch (error) {

@@ -360,14 +360,16 @@ def purge_disliked_from_queue():
 
 def set_queue(tracks, source_name, clear=True, filter_history=True, append=False):
     global current_queue, current_source, currently_playing_id, currently_playing_title, played_history
-    if clear: current_queue = []
     new_entries = []
-    existing_ids = {s['videoId'] for s in current_queue if s.get('videoId')}
-    if currently_playing_id: existing_ids.add(currently_playing_id)
-    
-    existing_titles = {normalize_song_title(s.get('title'), s.get('artist', '')) for s in current_queue if s.get('title')}
-    if currently_playing_title:
-        existing_titles.add(normalize_song_title(currently_playing_title))
+    if clear:
+        existing_ids = {currently_playing_id} if currently_playing_id else set()
+        existing_titles = {normalize_song_title(currently_playing_title)} if currently_playing_title else set()
+    else:
+        existing_ids = {s['videoId'] for s in current_queue if s.get('videoId')}
+        if currently_playing_id: existing_ids.add(currently_playing_id)
+        existing_titles = {normalize_song_title(s.get('title'), s.get('artist', '')) for s in current_queue if s.get('title')}
+        if currently_playing_title:
+            existing_titles.add(normalize_song_title(currently_playing_title))
     
     # Excluir canciones ya reproducidas en la sesión para evitar repeticiones
     history_ids = set()
@@ -797,8 +799,8 @@ def ensure_queue_populated(yt, threshold=10, blocking=False):
     global current_queue, is_refilling
     if len(current_queue) > threshold:
         return
-    # Si la cola está completamente vacía (len == 0), debemos bloquear para que peek/pop obtenga un tema de inmediato
-    if len(current_queue) == 0 or blocking:
+    # Si blocking es True (ej. refill explícito o peek/pop con cola vacía), ejecutar sincrónico. Si no, en hilo de fondo.
+    if blocking:
         _perform_refill(yt, threshold)
     else:
         if is_refilling:
