@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { PYTHON_SERVICE_URL, DJ_INTRODUCE_SONG_PROMPT, OPENROUTER_API_KEY } = require('../config/constants');
 const { getDJDecision } = require('../services/djService');
-const { generateTTS } = require('../services/ttsService');
+const { generateTTS, generateEdgeTTS } = require('../services/ttsService');
 const chatState = require('./chatState');
 
 const {
@@ -183,7 +183,7 @@ function isPureArtistRequest(text, detectedArtist) {
 }
 
 async function handleChat(req, res) {
-  const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone, session_id, taste_profile, voice_id, chat_history = [] } = req.body;
+  const { message, currentSong, searchType, personality = 'chill', frequency = 5, timeZone, session_id, taste_profile, voice_id, edge_voice_id, chat_history = [] } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
   const timeContext = getTimeContext(timeZone);
   
@@ -294,7 +294,7 @@ PERFIL DE GUSTOS Y RESTRICCIONES DEL USUARIO:
         djComment = djDecision?.locucion || (isDislike
           ? `¡Sin problema! Dejamos esa atrás y seguimos con ${nextSong.title} de ${songArtist}.`
           : `¡Seguimos con ${songArtist} y su tema ${nextSong.title}!`);
-        audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip' });
+        audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip', edgeVoiceId: edge_voice_id });
       }
 
       return res.json({ dj_comment: djComment, audioUrl, nextSong });
@@ -547,7 +547,7 @@ REGLAS OBLIGATORIAS:
         }
 
         // Generar locución de voz después de confirmar la canción real
-        audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip' });
+        audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip', edgeVoiceId: edge_voice_id });
 
         // Precargar letras de inmediato para que la primera canción también tenga traducción lista
         preloadSongLyrics(nextSong.videoId, nextSong.title, nextSong.artist).catch(() => {});
@@ -567,11 +567,11 @@ REGLAS OBLIGATORIAS:
           nextSong.globalRepeatCount = 1;
         }
       } else {
-        audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip' });
+        audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip', edgeVoiceId: edge_voice_id });
       }
     } else {
       nextSong = null;
-      audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip' });
+      audioUrl = await generateTTS(djComment, voice_id, { mode: 'vip', edgeVoiceId: edge_voice_id });
     }
 
     res.json({ 
@@ -588,7 +588,7 @@ REGLAS OBLIGATORIAS:
 
 // Endpoint para precargar la siguiente canción a los últimos 30 segundos
 async function handlePreload(req, res) {
-  const { currentSong, personality = 'chill', frequency = 5, timeZone, voice_id } = req.body;
+  const { currentSong, personality = 'chill', frequency = 5, timeZone, voice_id, edge_voice_id } = req.body;
   const targetFrequency = Number(frequency) >= 0 ? Number(frequency) : 5;
   const timeContext = getTimeContext(timeZone);
 
@@ -627,7 +627,8 @@ async function handlePreload(req, res) {
       );
       const djDecision = await getDJDecision("Presenta el siguiente tema que cerrará el bloque", introPrompt);
       djComment = djDecision?.locucion || `¡A continuación, ${songArtist} con ${candidate.title}!`;
-      audioUrl = await generateTTS(djComment, voice_id, { mode: 'transition' });
+      const targetEdgeVoice = edge_voice_id || voice_id;
+      audioUrl = await generateTTS(djComment, targetEdgeVoice, { mode: 'transition', edgeVoiceId: targetEdgeVoice });
       console.log(`[PRELOAD TRANSICIÓN EDGE-TTS]: "${candidate.title}" - ${songArtist}`);
     } else {
       console.log(`[PRELOAD SILENCIOSO]: "${candidate.title}" (${chatState.count + 1}/${targetFrequency || 'Solo Chat'})`);
@@ -685,11 +686,14 @@ function handleSessionTransition(req, res) {
 
 async function handleVoicePreview(req, res) {
   try {
-    const { voice_id, text } = req.body;
+    const { voice_id, text, provider } = req.body;
     if (!voice_id || !text) {
       return res.status(400).json({ error: "voice_id y text son requeridos" });
     }
-    const audioUrl = await generateTTS(text, voice_id, { mode: 'vip' });
+    const isEdge = provider === 'edge' || (typeof voice_id === 'string' && voice_id.startsWith('es-'));
+    const audioUrl = isEdge 
+      ? await generateEdgeTTS(text, voice_id)
+      : await generateTTS(text, voice_id, { mode: 'vip' });
     if (!audioUrl) {
       return res.status(500).json({ error: "No se pudo generar la muestra de voz" });
     }

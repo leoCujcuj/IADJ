@@ -62,6 +62,8 @@ export default function useDJRadio() {
     setIsSettingsOpen,
     selectedVoice,
     setSelectedVoice,
+    selectedEdgeVoice,
+    setSelectedEdgeVoice,
     playingPreviewVoiceId,
     handlePlayVoicePreview,
     frequencyRef,
@@ -70,6 +72,7 @@ export default function useDJRadio() {
     autoPauseOnTabChangeRef,
     duckingVolumeRef,
     selectedVoiceRef,
+    selectedEdgeVoiceRef,
     wasPlayingBeforeAutoPauseRef,
     wasDJSpeakingBeforeAutoPauseRef,
     wasSpeechSpeakingBeforeAutoPauseRef,
@@ -153,6 +156,11 @@ export default function useDJRadio() {
     }
   }, []);
 
+  // Invalida inmediatamente cualquier audio precargado al cambiar de locutor para que la nueva voz surta efecto al instante
+  useEffect(() => {
+    clearPreload();
+  }, [selectedVoice, selectedEdgeVoice, clearPreload]);
+
   // 4. Sub-hook de Sesiones
   const {
     sessionId,
@@ -179,8 +187,8 @@ export default function useDJRadio() {
     playedHistoryRef,
     chatHistory,
     setChatHistory,
-    settings: useMemo(() => ({ frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume }), [frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume]),
-    settingsSetters: useMemo(() => ({ setFrequency, setPersonality, setCrossfade, setAutoPauseOnTabChange, setDuckingVolume }), [setFrequency, setPersonality, setCrossfade, setAutoPauseOnTabChange, setDuckingVolume])
+    settings: useMemo(() => ({ frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume, selectedVoice, selectedEdgeVoice }), [frequency, personality, crossfade, autoPauseOnTabChange, duckingVolume, selectedVoice, selectedEdgeVoice]),
+    settingsSetters: useMemo(() => ({ setFrequency, setPersonality, setCrossfade, setAutoPauseOnTabChange, setDuckingVolume, setSelectedVoice, setSelectedEdgeVoice }), [setFrequency, setPersonality, setCrossfade, setAutoPauseOnTabChange, setDuckingVolume, setSelectedVoice, setSelectedEdgeVoice])
   });
 
   // 5. Sub-hook de Favoritos y Repeticiones
@@ -227,13 +235,20 @@ export default function useDJRadio() {
   const syncStatus = useCallback(async () => {
     try {
       const res = await fetch('http://127.0.0.1:3001/api/status');
+      if (!res.ok) {
+        // En caso de error del gateway (502, 503), NO borrar la cola actual del usuario
+        return;
+      }
       const data = await res.json();
+      if (!data || data.status === 'error' || !Array.isArray(data.queue)) {
+        return;
+      }
       const newStatus = data.status === 'logeado';
       setIsConnected(prev => prev !== newStatus ? newStatus : prev);
-      setQueue(prev => isSameTrackList(prev, data.queue) ? prev : (data.queue || []));
+      setQueue(prev => isSameTrackList(prev, data.queue) ? prev : data.queue);
       setQueueSource(prev => prev !== data.source ? data.source : prev);
     } catch (e) {
-      console.error(e);
+      console.error("Error en syncStatus:", e);
     }
   }, []);
 
@@ -360,7 +375,8 @@ export default function useDJRadio() {
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           session_id: sessionId,
           taste_profile: tasteProfileRef.current || tasteProfile,
-          voice_id: selectedVoiceRef.current || selectedVoice
+          voice_id: selectedVoiceRef.current || selectedVoice,
+          edge_voice_id: selectedEdgeVoiceRef.current || selectedEdgeVoice
         })
       });
       const data = await res.json();
@@ -438,7 +454,8 @@ export default function useDJRadio() {
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           session_id: sessionId,
           taste_profile: tasteProfileRef.current || tasteProfile,
-          voice_id: selectedVoiceRef.current || selectedVoice
+          voice_id: selectedVoiceRef.current || selectedVoice,
+          edge_voice_id: selectedEdgeVoiceRef.current || selectedEdgeVoice
         })
       });
       const data = await response.json();
@@ -1323,6 +1340,8 @@ export default function useDJRadio() {
     saveTasteProfile,
     selectedVoice,
     setSelectedVoice,
+    selectedEdgeVoice,
+    setSelectedEdgeVoice,
     playingPreviewVoiceId,
     handlePlayVoicePreview
   };

@@ -1229,6 +1229,78 @@ body, html {
 }
 
 /* --- Selector de Voces del Locutor --- */
+.voice-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  margin-bottom: 0.85rem;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0.3rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.voice-tab-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.8rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.voice-tab-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.voice-tab-btn.active {
+  background: var(--surface);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.voice-tab-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.12rem 0.45rem;
+  border-radius: 5px;
+  background: rgba(168, 85, 247, 0.2);
+  color: #d8b4fe;
+}
+
+.voice-tab-badge.vip {
+  background: rgba(234, 179, 8, 0.2);
+  color: #fde047;
+}
+
+.voice-country-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.12rem 0.45rem;
+  border-radius: 6px;
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  display: inline-block;
+}
+
+.voice-country-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.15rem 0 0.35rem 0;
+}
+
 .voice-options-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));

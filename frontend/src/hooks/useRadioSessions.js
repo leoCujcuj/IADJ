@@ -90,6 +90,8 @@ export default function useRadioSessions({
             if (s.settings.crossfade !== undefined && currentSetters.setCrossfade) currentSetters.setCrossfade(s.settings.crossfade);
             if (s.settings.autoPauseOnTabChange !== undefined && currentSetters.setAutoPauseOnTabChange) currentSetters.setAutoPauseOnTabChange(s.settings.autoPauseOnTabChange);
             if (s.settings.duckingVolume !== undefined && currentSetters.setDuckingVolume) currentSetters.setDuckingVolume(s.settings.duckingVolume);
+            if (s.settings.selectedVoice && currentSetters.setSelectedVoice) currentSetters.setSelectedVoice(s.settings.selectedVoice);
+            if (s.settings.selectedEdgeVoice && currentSetters.setSelectedEdgeVoice) currentSetters.setSelectedEdgeVoice(s.settings.selectedEdgeVoice);
           }
           hasRestoredSuccessfullyRef.current = true;
           setSessionStatus('restored');
@@ -340,6 +342,8 @@ export default function useRadioSessions({
           if (s.settings.crossfade !== undefined && settingsSetters.setCrossfade) settingsSetters.setCrossfade(s.settings.crossfade);
           if (s.settings.autoPauseOnTabChange !== undefined && settingsSetters.setAutoPauseOnTabChange) settingsSetters.setAutoPauseOnTabChange(s.settings.autoPauseOnTabChange);
           if (s.settings.duckingVolume !== undefined && settingsSetters.setDuckingVolume) settingsSetters.setDuckingVolume(s.settings.duckingVolume);
+          if (s.settings.selectedVoice && settingsSetters.setSelectedVoice) settingsSetters.setSelectedVoice(s.settings.selectedVoice);
+          if (s.settings.selectedEdgeVoice && settingsSetters.setSelectedEdgeVoice) settingsSetters.setSelectedEdgeVoice(s.settings.selectedEdgeVoice);
         }
 
         setSessionStatus('restored');

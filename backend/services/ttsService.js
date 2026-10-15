@@ -30,11 +30,11 @@ const ELEVENLABS_TO_EDGE_VOICES = {
 };
 
 function resolveEdgeVoice(voiceId) {
-  if (voiceId && ELEVENLABS_TO_EDGE_VOICES[voiceId]) {
-    return ELEVENLABS_TO_EDGE_VOICES[voiceId];
-  }
   if (voiceId && typeof voiceId === 'string' && voiceId.startsWith('es-')) {
     return voiceId;
+  }
+  if (voiceId && ELEVENLABS_TO_EDGE_VOICES[voiceId]) {
+    return ELEVENLABS_TO_EDGE_VOICES[voiceId];
   }
   return 'es-MX-JorgeNeural';
 }
@@ -107,53 +107,69 @@ async function generateEdgeTTS(text, customVoiceId = null) {
     } catch (e) {}
   }
 
-  try {
-    console.log(`Generando voz con Edge-TTS (${edgeVoice})... (Texto: "${text.slice(0, 50)}...")`);
-    const tts = new MsEdgeTTS();
-    await tts.setMetadata(edgeVoice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
-    const readable = tts.toStream(text);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      console.log(`Generando voz con Edge-TTS (${edgeVoice})${attempt > 1 ? ` [Intento ${attempt}]` : ''}... (Texto: "${text.slice(0, 50)}...")`);
+      const tts = new MsEdgeTTS();
+      await tts.setMetadata(edgeVoice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
+      const readable = tts.toStream(text);
 
-    await new Promise((resolve, reject) => {
-      const writeStream = fs.createWriteStream(filePath);
-      readable.audioStream.pipe(writeStream);
-      readable.audioStream.on('error', reject);
-      writeStream.on('finish', resolve);
-      writeStream.on('error', reject);
-    });
+      await new Promise((resolve, reject) => {
+        const writeStream = fs.createWriteStream(filePath);
+        readable.audioStream.pipe(writeStream);
+        readable.audioStream.on('error', reject);
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+      });
 
-    const stats = fs.statSync(filePath);
-    if (stats.size > 100) {
-      console.log(`Voz Edge-TTS generada y guardada en caché: ${fileName} (${stats.size} bytes)`);
-      return `/audio/${fileName}`;
-    } else {
-      console.warn(`Archivo generado por Edge-TTS es muy pequeño (${stats.size} bytes), eliminando.`);
-      try { fs.unlinkSync(filePath); } catch (e) {}
-      return null;
+      const stats = fs.statSync(filePath);
+      if (stats.size > 100) {
+        console.log(`Voz Edge-TTS generada y guardada en caché: ${fileName} (${stats.size} bytes)`);
+        return `/audio/${fileName}`;
+      } else {
+        console.warn(`Archivo generado por Edge-TTS es muy pequeño (${stats.size} bytes), eliminando.`);
+        try { fs.unlinkSync(filePath); } catch (e) {}
+        if (attempt === 3) return null;
+      }
+    } catch (error) {
+      console.error(`Error al generar voz con Edge-TTS (intento ${attempt}):`, error.message);
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch (e) {}
+      }
+      if (attempt < 3) {
+        // Pausa progresiva para recuperación de conexión WebSocket o 429
+        await new Promise(r => setTimeout(r, attempt * 1000));
+      } else {
+        return null;
+      }
     }
-  } catch (error) {
-    console.error("Error al generar voz con Edge-TTS:", error.message);
-    if (fs.existsSync(filePath)) {
-      try { fs.unlinkSync(filePath); } catch (e) {}
-    }
-    return null;
   }
+  return null;
 }
 
 async function generateTTS(text, customVoiceId = null, options = { mode: 'vip' }) {
   if (!text || !text.trim()) return null;
   const mode = (typeof options === 'object' && options?.mode) ? options.mode : (typeof options === 'string' ? options : 'vip');
+  const edgeVoiceId = (typeof options === 'object' && options?.edgeVoiceId) ? options.edgeVoiceId : null;
+  const targetEdgeVoice = edgeVoiceId || (typeof customVoiceId === 'string' && customVoiceId.startsWith('es-') ? customVoiceId : resolveEdgeVoice(customVoiceId));
 
-  // Modo transicion: presentaciones rutinarias entre canciones con Edge-TTS (0 cuota ElevenLabs)
+  // 1. Modo transicion: presentaciones rutinarias entre canciones con Edge-TTS (0 cuota ElevenLabs)
   if (mode === 'transition') {
-    console.log(`[TTS HÍBRIDO - TRANSICIÓN]: Presentación rutinaria detectada -> Usando Edge-TTS (cero cuota ElevenLabs).`);
+    console.log(`[TTS HÍBRIDO - TRANSICIÓN]: Presentación rutinaria detectada -> Usando Edge-TTS (${resolveEdgeVoice(targetEdgeVoice)}).`);
+    return await generateEdgeTTS(text, targetEdgeVoice);
+  }
+
+  // 2. Si el usuario seleccionó una voz de Edge-TTS directamente como su voz activa para todo
+  if (customVoiceId && typeof customVoiceId === 'string' && customVoiceId.startsWith('es-')) {
+    console.log(`[TTS DIRECTO]: Voz Edge-TTS seleccionada (${customVoiceId}) -> Usando Edge-TTS.`);
     return await generateEdgeTTS(text, customVoiceId);
   }
 
-  // Modo VIP: interacción manual en el chat
+  // 3. Modo VIP: interacción manual en el chat
   const keys = getElevenLabsKeys();
   if (keys.length === 0) {
     console.warn("Advertencia: No hay ninguna ELEVENLABS_API_KEY configurada. Conmutando automáticamente a Edge-TTS.");
-    return await generateEdgeTTS(text, customVoiceId);
+    return await generateEdgeTTS(text, targetEdgeVoice);
   }
 
   const voiceToUse = (customVoiceId && customVoiceId.trim()) || process.env.ELEVENLABS_VOICE_ID || ELEVENLABS_VOICE_ID;
@@ -179,7 +195,7 @@ async function generateTTS(text, customVoiceId = null, options = { mode: 'vip' }
   const availableKeys = keys.filter(k => !exhaustedKeys.has(k));
   if (availableKeys.length === 0) {
     console.warn("[ElevenLabs]: Todas las claves han agotado su cuota mensual. Conmutando automáticamente a Edge-TTS como respaldo.");
-    return await generateEdgeTTS(text, customVoiceId);
+    return await generateEdgeTTS(text, targetEdgeVoice);
   }
 
   // Asegurar que activeKeyIndex apunte a una clave no agotada
@@ -199,7 +215,7 @@ async function generateTTS(text, customVoiceId = null, options = { mode: 'vip' }
       const nextIdx = keys.findIndex(k => !exhaustedKeys.has(k));
       if (nextIdx === -1) {
         console.warn("[ElevenLabs]: Todas las claves han agotado su cuota mensual. Conmutando automáticamente a Edge-TTS como respaldo.");
-        return await generateEdgeTTS(text, customVoiceId);
+        return await generateEdgeTTS(text, targetEdgeVoice);
       }
       activeKeyIndex = nextIdx;
       continue;
@@ -236,7 +252,7 @@ async function generateTTS(text, customVoiceId = null, options = { mode: 'vip' }
           continue;
         } else {
           console.warn("[ElevenLabs]: Cuota agotada en todas las cuentas de ElevenLabs configuradas. Conmutando automáticamente a Edge-TTS.");
-          return await generateEdgeTTS(text, customVoiceId);
+          return await generateEdgeTTS(text, targetEdgeVoice);
         }
       } else {
         if (error.response) {
@@ -246,13 +262,13 @@ async function generateTTS(text, customVoiceId = null, options = { mode: 'vip' }
           console.error("Error de red con ElevenLabs:", error.message);
         }
         console.warn("[ElevenLabs]: Conmutando a Edge-TTS tras fallo en ElevenLabs.");
-        return await generateEdgeTTS(text, customVoiceId);
+        return await generateEdgeTTS(text, targetEdgeVoice);
       }
     }
   }
 
   console.warn("[ElevenLabs]: Intentos agotados. Conmutando a Edge-TTS.");
-  return await generateEdgeTTS(text, customVoiceId);
+  return await generateEdgeTTS(text, targetEdgeVoice);
 }
 
 module.exports = {

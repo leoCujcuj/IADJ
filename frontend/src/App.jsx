@@ -101,6 +101,8 @@ function App() {
     saveTasteProfile,
     selectedVoice,
     setSelectedVoice,
+    selectedEdgeVoice,
+    setSelectedEdgeVoice,
     playingPreviewVoiceId,
     handlePlayVoicePreview
   } = useDJRadio();
@@ -198,6 +200,8 @@ function App() {
         setPersonality={setPersonality}
         selectedVoice={selectedVoice}
         setSelectedVoice={setSelectedVoice}
+        selectedEdgeVoice={selectedEdgeVoice}
+        setSelectedEdgeVoice={setSelectedEdgeVoice}
         playingPreviewVoiceId={playingPreviewVoiceId}
         onPlayVoicePreview={handlePlayVoicePreview}
         crossfade={crossfade}

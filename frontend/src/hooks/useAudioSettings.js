@@ -84,10 +84,22 @@ export default function useAudioSettings() {
     localStorage.setItem('dj_voice_id', val);
   }, []);
 
+  // Seleccion y preview de voz de transicion (Microsoft Edge-TTS en Espanol)
+  const [selectedEdgeVoice, setSelectedEdgeVoiceState] = useState(() => {
+    return localStorage.getItem('dj_edge_voice_id') || 'es-MX-JorgeNeural';
+  });
+  const selectedEdgeVoiceRef = useRef(selectedEdgeVoice);
+
+  const setSelectedEdgeVoice = useCallback((val) => {
+    setSelectedEdgeVoiceState(val);
+    selectedEdgeVoiceRef.current = val;
+    localStorage.setItem('dj_edge_voice_id', val);
+  }, []);
+
   const [playingPreviewVoiceId, setPlayingPreviewVoiceId] = useState(null);
   const previewAudioRef = useRef(null);
 
-  const handlePlayVoicePreview = useCallback(async (voiceId, previewText) => {
+  const handlePlayVoicePreview = useCallback(async (voiceId, previewText, provider = 'edge') => {
     if (previewAudioRef.current) {
       try { previewAudioRef.current.pause(); } catch (e) {}
       previewAudioRef.current = null;
@@ -104,7 +116,7 @@ export default function useAudioSettings() {
       const res = await fetch('http://127.0.0.1:3001/api/voice/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voice_id: voiceId, text: previewText })
+        body: JSON.stringify({ voice_id: voiceId, text: previewText, provider })
       });
       const data = await res.json();
       if (data && data.audioUrl) {
@@ -152,6 +164,8 @@ export default function useAudioSettings() {
     setIsSettingsOpen,
     selectedVoice,
     setSelectedVoice,
+    selectedEdgeVoice,
+    setSelectedEdgeVoice,
     playingPreviewVoiceId,
     handlePlayVoicePreview,
     // Refs para sincronizacion sin re-renders en timers
@@ -161,6 +175,7 @@ export default function useAudioSettings() {
     autoPauseOnTabChangeRef,
     duckingVolumeRef,
     selectedVoiceRef,
+    selectedEdgeVoiceRef,
     wasPlayingBeforeAutoPauseRef,
     wasDJSpeakingBeforeAutoPauseRef,
     wasSpeechSpeakingBeforeAutoPauseRef,
