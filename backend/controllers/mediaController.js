@@ -1,7 +1,7 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { PYTHON_SERVICE_URL } = require('../config/constants');
+const { PYTHON_SERVICE_URL, GROQ_API_KEY } = require('../config/constants');
 const { getDJDecision } = require('../services/djService');
 
 const lyricsCacheFolder = path.join(__dirname, '..', 'temp_audio', 'lyrics_cache');
@@ -43,32 +43,55 @@ function parseLRCLines(lrcText) {
 }
 
 async function fastTranslateText(text) {
+  // 1. Google Translate Client GTX (directo, sin límite 429 de scraping móvil)
   try {
-    const url = "https://translate.google.com/m?sl=auto&tl=es&q=" + encodeURIComponent(text);
+    const url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=es&dt=t&q=" + encodeURIComponent(text);
     const res = await axios.get(url, { 
       headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }, 
       timeout: 5000 
     });
-    const match = res.data.match(/<div class="result-container">(.*?)<\/div>/s);
-    if (match) {
-      return match[1]
-        .replace(/<br\s*[\/]?>/gi, "\n")
-        .replace(/&amp;/g, "&")
-        .replace(/&quot;/g, "\"")
-        .replace(/&#39;/g, "'")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">");
+    if (res.data && Array.isArray(res.data[0])) {
+      const translated = res.data[0].map(item => item[0]).join('');
+      const detected = res.data[2] || '';
+      return { translated, detected };
     }
   } catch (err) {
-    console.error("Error en fastTranslateText (Google):", err.message);
+    console.warn("Google GTX falló, probando fallback con Groq:", err.message);
   }
 
+  // 2. Fallback de alta velocidad con Groq AI
+  if (GROQ_API_KEY) {
+    try {
+      const groqRes = await axios.post("https://api.groq.com/openai/v1/chat/completions", {
+        model: "qwen/qwen3.8-27b",
+        messages: [
+          { role: "system", content: "Traduce las siguientes líneas de letra al español de forma natural. Conserva exactamente las etiquetas [N] al inicio de cada línea sin omitir ninguna." },
+          { role: "user", content: text }
+        ],
+        temperature: 0.2
+      }, {
+        headers: {
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 6000
+      });
+      const content = groqRes.data?.choices?.[0]?.message?.content;
+      if (content) {
+        return { translated: content, detected: 'auto' };
+      }
+    } catch (gErr) {
+      console.warn("Groq fallback de traducción falló:", gErr.message);
+    }
+  }
+
+  // 3. Fallback de rescate con MyMemory
   try {
     const cleanedText = text.substring(0, 450);
     const myMemoryUrl = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(cleanedText) + "&langpair=auto|es";
     const mmRes = await axios.get(myMemoryUrl, { timeout: 4000 });
     if (mmRes.data?.responseData?.translatedText) {
-      return mmRes.data.responseData.translatedText;
+      return { translated: mmRes.data.responseData.translatedText, detected: 'auto' };
     }
   } catch (mErr) {}
 
@@ -90,35 +113,61 @@ async function translateLyrics(textArray, videoId) {
   }
 
   try {
-    const taggedPayload = textArray.map((line, idx) => `[${idx}] ${line || ' '}`).join('\n');
-    let translatedBlock = await fastTranslateText(taggedPayload);
-    
-    if (translatedBlock) {
-      const resultMap = new Map();
-      const lineRegex = /\[(\d+)\]\s*([^\[\n]*)/g;
-      let match;
-      while ((match = lineRegex.exec(translatedBlock)) !== null) {
-        const index = parseInt(match[1], 10);
-        const translatedText = match[2].trim();
-        resultMap.set(index, translatedText);
-      }
-
-      if (resultMap.size > 0) {
-        const alignedTranslations = textArray.map((originalLine, idx) => {
-          if (!originalLine || !originalLine.trim()) return '';
-          return resultMap.get(idx) || '';
+    // 1. Detección rápida de idioma: si la canción ya está en español, evitar llamadas innecesarias
+    const nonEmpties = textArray.filter(l => l && l.trim().length > 0).slice(0, 5);
+    if (nonEmpties.length > 0) {
+      const sampleText = nonEmpties.join('\n');
+      try {
+        const detectUrl = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=es&dt=t&q=" + encodeURIComponent(sampleText);
+        const dRes = await axios.get(detectUrl, { 
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+          timeout: 3000 
         });
+        const detectedLang = dRes.data?.[2];
+        if (detectedLang === 'es') {
+          console.log(`[LYRICS EN ESPAÑOL DETECTADAS]: La canción ya es en español (${videoId}), omitiendo traducción redundante.`);
+          const spanishOriginal = textArray.map(l => l || '');
+          fs.writeFileSync(cacheFile, JSON.stringify(spanishOriginal));
+          return spanishOriginal;
+        }
+      } catch (dErr) {}
+    }
 
-        fs.writeFileSync(cacheFile, JSON.stringify(alignedTranslations));
-        console.log(`[LYRICS TRADUCIDAS ALINEADAS 1:1]: ${alignedTranslations.length} versos para ${videoId}`);
-        return alignedTranslations;
+    // 2. Procesamiento por lotes de 25 líneas para evitar límites de URL y garantizar alineación 1:1
+    const BATCH_SIZE = 25;
+    const resultMap = new Map();
+    const lineRegex = /\[(\d+)\]\s*([^\[\n]*)/g;
+
+    for (let i = 0; i < textArray.length; i += BATCH_SIZE) {
+      const chunk = textArray.slice(i, i + BATCH_SIZE);
+      const taggedChunk = chunk.map((line, offset) => `[${i + offset}] ${line || ' '}`).join('\n');
+      
+      const res = await fastTranslateText(taggedChunk);
+      const translatedBlock = res?.translated;
+      if (translatedBlock) {
+        let match;
+        while ((match = lineRegex.exec(translatedBlock)) !== null) {
+          const index = parseInt(match[1], 10);
+          const translatedText = match[2].trim();
+          resultMap.set(index, translatedText);
+        }
       }
     }
+
+    if (resultMap.size > 0) {
+      const alignedTranslations = textArray.map((originalLine, idx) => {
+        if (!originalLine || !originalLine.trim()) return '';
+        return resultMap.get(idx) || '';
+      });
+
+      fs.writeFileSync(cacheFile, JSON.stringify(alignedTranslations));
+      console.log(`[LYRICS TRADUCIDAS ALINEADAS 1:1]: ${alignedTranslations.length} versos para ${videoId}`);
+      return alignedTranslations;
+    }
   } catch (err) {
-    console.error("Error traduciendo letras con scraper:", err.message);
+    console.error("Error traduciendo letras:", err.message);
   }
 
-  // Nota: No usamos LLM para traducir letras completas de canciones para evitar agotar cuotas y tokens.
   return [];
 }
 
