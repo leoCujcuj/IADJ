@@ -3,6 +3,7 @@ import { Headphones, Loader2, Mic, MicOff, Send } from 'lucide-react';
 import ChatBubble from './common/ChatBubble';
 
 export default function ChatSection({
+  className = '',
   chatHistory,
   loading,
   message,
@@ -19,7 +20,7 @@ export default function ChatSection({
   chatEndRef
 }) {
   return (
-    <section className="chat-section">
+    <section className={`chat-section ${className}`}>
       <div className="chat-header">
         <Headphones size={18} />
         <span>DJ Booth</span>
@@ -40,6 +41,7 @@ export default function ChatSection({
         <div 
           className={`mode-selector ${isMenuOpen ? 'expanded' : 'collapsed'}`}
           onClick={() => setIsMenuOpen(!isMenuOpen)}
+          title="Cambiar modo de búsqueda"
         >
           {sortedModes.map((mode) => {
             const Icon = mode.icon;
@@ -56,6 +58,7 @@ export default function ChatSection({
                   }
                 }}
                 title={mode.title}
+                aria-label={mode.title}
               >
                 <Icon size={18} />
               </button>
@@ -67,8 +70,8 @@ export default function ChatSection({
           type="button" 
           className={`mic-btn ${isListening ? 'listening' : ''}`} 
           onClick={toggleListening}
-          title={isListening ? "Detener microfono" : "Hablar con el DJ"}
-          aria-label={isListening ? "Detener microfono" : "Hablar con el DJ"}
+          title={isListening ? "Detener micrófono" : "Hablar con el DJ"}
+          aria-label={isListening ? "Detener micrófono" : "Hablar con el DJ"}
         >
           {isListening ? <MicOff size={19} /> : <Mic size={19} />}
         </button>
@@ -82,8 +85,9 @@ export default function ChatSection({
             setMessage(e.target.value);
           }} 
           placeholder={isListening ? "Escuchando... habla ahora..." : `Pedir ${activeMode?.placeholder || 'canción'}...`} 
+          autoComplete="off"
         />
-        <button type="submit" className="send-btn" disabled={loading}>
+        <button type="submit" className="send-btn" disabled={loading} title="Enviar al DJ" aria-label="Enviar al DJ">
           <Send size={18} />
         </button>
       </form>

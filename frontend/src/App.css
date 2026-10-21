@@ -63,12 +63,17 @@ body, html {
 .header {
   height: var(--header-height);
   background-color: var(--bg-card);
-  padding: 0 2rem;
+  padding: 0 1.5rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  width: 100%;
+  max-width: 100vw;
+  box-sizing: border-box;
+  position: relative;
+  z-index: 40;
 }
 
 .header-content {
@@ -171,12 +176,15 @@ body, html {
 }
 
 .chat-input-form {
-  padding: 1.2rem 1.5rem;
+  position: relative;
+  padding: 0.85rem 1rem;
   display: flex;
-  gap: 0.8rem;
+  gap: 0.5rem;
   background: var(--bg-card);
   border-top: 1px solid var(--border);
   align-items: center;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .mode-selector {
@@ -256,6 +264,7 @@ body, html {
 
 .chat-input-form input {
   flex: 1;
+  min-width: 0; /* Previene desbordamiento en anchos reducidos */
   height: 42px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -658,6 +667,7 @@ body, html {
 
 .manual-add-form input {
   flex: 1;
+  min-width: 0;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border);
   padding: 10px 15px;
@@ -915,32 +925,300 @@ body, html {
   background: rgba(255, 255, 255, 0.015);
 }
 
-/* RESPONSIVE DESIGN - El ajuste dinámico */
-@media (max-width: 1100px) {
-  .chat-section { width: 320px; }
+/* ==========================================================================
+   SISTEMA DE AUTOSIZE Y DISEÑO RESPONSIVO MULTIPLATAFORMA (MÓVILES, TABLETS, PC)
+   ========================================================================== */
+
+/* PESTAÑAS DE NAVEGACIÓN MÓVIL (Reproductor vs DJ Booth) */
+.mobile-view-tabs {
+  display: none; /* Oculto en ordenadores y tablets en modo apaisado */
+  background: #111115;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  z-index: 35;
 }
 
-@media (max-width: 850px) {
-  .main-content {
-    flex-direction: column;
-    overflow-y: auto; /* El scroll pasa a ser de toda la página */
-  }
+.mobile-tab-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mobile-tab-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mobile-tab-btn.active {
+  background: rgba(30, 215, 96, 0.12);
+  border-color: rgba(30, 215, 96, 0.35);
+  color: var(--primary);
+}
+
+/* TABLETS Y PANTALLAS MEDIANAS (769px a 1100px) */
+@media (max-width: 1100px) {
   .chat-section {
-    width: 100%;
-    height: 500px; /* Altura fija en móvil para el chat */
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
+    width: 310px;
   }
-  .player-section {
-    width: 100%;
-    overflow-y: visible; /* Dejamos que el scroll lo maneje el main-content */
+  .header {
+    padding: 0 1rem;
+    height: 62px;
+  }
+  /* Ocultar etiquetas de texto de botones secundarios para prevenir desbordes */
+  .header-action-btn:not(.session-action-btn) .btn-label {
+    display: none;
+  }
+  .header-action-btn:not(.session-action-btn) {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* En chat estrecho el selector de modo se expande hacia arriba como popover sin romper el input */
+  .mode-selector.expanded {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0.75rem;
+    z-index: 60;
+    max-width: none;
+    width: auto;
+    background: #141418;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.8);
+    padding: 4px;
+    border-radius: 24px;
+  }
+}
+
+/* PANTALLAS MÓVILES Y TABLETS PEQUEÑAS (<= 768px) */
+@media (max-width: 768px) {
+  .mobile-view-tabs {
+    display: flex;
   }
   .app-container {
-    height: auto; /* En móvil permitimos que crezca */
-    overflow-y: auto;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
-  body { overflow-y: auto; }
+  .main-content {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    position: relative;
+    width: 100%;
+  }
+  /* Alternancia fluida entre Reproductor y Chat en móvil */
+  .chat-section.mobile-hidden,
+  .player-section.mobile-hidden {
+    display: none !important;
+  }
+  .chat-section.mobile-active {
+    display: flex !important;
+    width: 100% !important;
+    height: 100% !important;
+    border-right: none !important;
+    flex: 1;
+  }
+  .player-section.mobile-active {
+    display: flex !important;
+    width: 100% !important;
+    height: 100% !important;
+    overflow-y: auto !important;
+    padding: 1rem 0.75rem !important;
+    flex: 1;
+  }
+  /* Navbar en móvil ultra-limpio con iconos circulares perfectamente centrados */
+  .header {
+    padding: 0 0.75rem;
+    height: 56px;
+  }
+  .header-title {
+    font-size: 1.15rem;
+  }
+  .logo-icon {
+    width: 22px;
+    height: 22px;
+  }
+  .header-actions {
+    gap: 0.35rem;
+  }
+  .header-action-btn .btn-label {
+    display: none !important;
+  }
+  .header-action-btn,
+  .header-action-btn:not(.session-action-btn) {
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-sizing: border-box !important;
+  }
+  .header-action-btn svg {
+    width: 18px !important;
+    height: 18px !important;
+    margin: 0 auto !important;
+    display: block !important;
+    flex-shrink: 0 !important;
+  }
+  .yt-status-pill {
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-sizing: border-box !important;
+  }
+  .yt-status-pill svg {
+    margin: 0 auto !important;
+    display: block !important;
+  }
+  .yt-status-pill .status-pill-text {
+    display: none !important;
+  }
+  /* Chat input móvil */
+  .chat-input-form {
+    padding: 0.65rem 0.75rem;
+    gap: 0.4rem;
+  }
+  .mic-btn, .send-btn {
+    width: 38px;
+    height: 38px;
+  }
+  .chat-input-form input {
+    height: 38px;
+    font-size: 0.85rem;
+    padding: 0 0.85rem;
+  }
+  .mode-selector {
+    height: 38px;
+  }
+  .mode-selector.collapsed {
+    width: 38px;
+    min-width: 38px;
+    max-width: 38px;
+  }
+  .mode-selector.expanded {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0.75rem;
+    z-index: 60;
+    max-width: none;
+    width: auto;
+    background: #141418;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.8);
+    padding: 4px;
+    border-radius: 24px;
+  }
+  .mode-btn {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+  }
+  /* Controles y tarjetas en móvil */
+  .player-controls-bar {
+    padding: 0.75rem 0.8rem;
+    margin-bottom: 1.25rem;
+    border-radius: 12px;
+  }
+  .unified-controls-row {
+    justify-content: center;
+    gap: 0.45rem;
+  }
+  /* Cola en columna única */
+  .queue-list {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+  }
+  .queue-item {
+    padding: 0.65rem 0.8rem;
+  }
+  .manual-add-form {
+    gap: 6px;
+    margin-bottom: 1rem;
+  }
+}
+
+/* DISPOSITIVOS MUY ESTRECHOS (<= 400px - iPhone SE, Galaxy Mini) */
+@media (max-width: 400px) {
+  .header {
+    padding: 0 0.4rem;
+  }
+  .header-actions {
+    gap: 0.25rem;
+  }
+  .header-action-btn,
+  .header-action-btn:not(.session-action-btn) {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    padding: 0 !important;
+  }
+  .header-action-btn svg {
+    width: 15px !important;
+    height: 15px !important;
+    margin: 0 auto !important;
+  }
+  .yt-status-pill {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    padding: 0 !important;
+  }
+  .unified-controls-row {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.65rem;
+    width: 100%;
+  }
+  .controls-group.playback-group {
+    order: 1;
+    width: 100%;
+    justify-content: center;
+  }
+  .controls-group.discovery-group {
+    order: 2;
+    width: 100%;
+    justify-content: center;
+  }
+  .controls-group.reactions-group {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+  }
+  .control-btn {
+    height: 34px;
+    padding: 0 10px;
+    font-size: 0.76rem;
+  }
 }
 
 /* Botones de accion chat */
@@ -1032,12 +1310,15 @@ body, html {
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  max-width: 100%;
 }
 
 .header-action-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
   background: var(--surface);
   border: 1px solid var(--border);

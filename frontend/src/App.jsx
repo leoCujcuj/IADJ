@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { Music, Headphones } from 'lucide-react';
 import './App.css';
 import Header from './components/Header';
 import ChatSection from './components/ChatSection';
@@ -14,6 +15,7 @@ import ConfirmModal from './components/common/ConfirmModal';
 import useDJRadio from './hooks/useDJRadio';
 
 function App() {
+  const [mobileTab, setMobileTab] = useState('player');
   const {
     message,
     setMessage,
@@ -122,8 +124,29 @@ function App() {
         onOpenTasteProfile={() => setIsTasteModalOpen(true)}
       />
 
+      {/* Selector de pestañas para móviles y pantallas pequeñas */}
+      <nav className="mobile-view-tabs" aria-label="Navegación en pantallas móviles">
+        <button
+          type="button"
+          className={`mobile-tab-btn ${mobileTab === 'player' ? 'active' : ''}`}
+          onClick={() => setMobileTab('player')}
+        >
+          <Music size={16} />
+          <span>Reproductor</span>
+        </button>
+        <button
+          type="button"
+          className={`mobile-tab-btn ${mobileTab === 'chat' ? 'active' : ''}`}
+          onClick={() => setMobileTab('chat')}
+        >
+          <Headphones size={16} />
+          <span>DJ Booth</span>
+        </button>
+      </nav>
+
       <main className="main-content">
         <ChatSection
+          className={mobileTab === 'chat' ? 'mobile-active' : 'mobile-hidden'}
           chatHistory={chatHistory}
           loading={loading}
           message={message}
@@ -140,7 +163,7 @@ function App() {
           chatEndRef={chatEndRef}
         />
         
-        <section className="player-section">
+        <section className={`player-section ${mobileTab === 'player' ? 'mobile-active' : 'mobile-hidden'}`}>
           <div className="player-wrapper">
             <PlayerCard
               currentSong={currentSong}
