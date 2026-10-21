@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import QueueItem from './common/QueueItem';
 
 export default function QueueSection({
@@ -11,11 +11,31 @@ export default function QueueSection({
   handleRemoveFromQueue,
   history
 }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const displayedQueue = isExpanded ? queue : queue.slice(0, 10);
+  const remainingCount = queue.length > 10 ? queue.length - 10 : 0;
+
   return (
     <div className="queue-container">
       <div className="queue-header">
-        <h3>Próximas canciones</h3>
-        {queueSource && <span className="queue-source">{queueSource}</span>}
+        <div className="queue-header-left">
+          <h3>Próximas canciones</h3>
+          {queue.length > 0 && <span className="queue-counter">({queue.length})</span>}
+        </div>
+        <div className="queue-header-right">
+          {queue.length > 10 && isExpanded && (
+            <button 
+              type="button" 
+              className="queue-collapse-btn"
+              onClick={() => setIsExpanded(false)}
+              title="Mostrar solo las primeras 10 canciones"
+            >
+              Mostrar menos
+            </button>
+          )}
+          {queueSource && <span className="queue-source">{queueSource}</span>}
+        </div>
       </div>
       
       <form className="manual-add-form" onSubmit={handleAddManual}>
@@ -29,9 +49,9 @@ export default function QueueSection({
       </form>
 
       <div className="queue-list">
-        {queue.slice(0, 10).map((song, idx) => (
+        {displayedQueue.map((song, idx) => (
           <QueueItem 
-            key={idx}
+            key={song.videoId || song.id ? `${song.videoId || song.id}-${idx}` : idx}
             song={song}
             index={idx}
             totalItems={queue.length}
@@ -39,7 +59,31 @@ export default function QueueSection({
             handleRemoveFromQueue={handleRemoveFromQueue}
           />
         ))}
-        {queue.length > 10 && <div className="queue-more">y {queue.length - 10} más...</div>}
+
+        {queue.length > 10 && !isExpanded && (
+          <button 
+            type="button"
+            className="queue-more-btn"
+            onClick={() => setIsExpanded(true)}
+            title="Ver todas las canciones en cola"
+          >
+            <span className="queue-more-text">y {remainingCount} más...</span>
+            <span className="queue-more-action">Ver todas</span>
+          </button>
+        )}
+
+        {queue.length > 10 && isExpanded && (
+          <button 
+            type="button"
+            className="queue-more-btn expanded"
+            onClick={() => setIsExpanded(false)}
+            title="Mostrar solo las primeras 10 canciones"
+          >
+            <span className="queue-more-text">Cola completa ({queue.length} canciones)</span>
+            <span className="queue-more-action">Mostrar menos</span>
+          </button>
+        )}
+
         {queue.length === 0 && <p className="empty-msg">No hay más canciones en cola</p>}
       </div>
 
@@ -51,7 +95,7 @@ export default function QueueSection({
           <div className="queue-list history">
             {history.slice(0, 5).map((song, idx) => (
               <QueueItem 
-                key={idx}
+                key={song.videoId || song.id ? `history-${song.videoId || song.id}-${idx}` : `history-${idx}`}
                 song={song}
                 isPlayed={true}
               />
